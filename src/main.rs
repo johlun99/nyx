@@ -1,5 +1,6 @@
 mod app;
 mod buffer;
+mod vim;
 
 fn main() -> eframe::Result<()> {
     tracing_subscriber::fmt::init();
