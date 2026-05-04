@@ -17,9 +17,12 @@ pub struct Editor {
 impl Editor {
     pub fn new(file_path: Option<String>) -> Self {
         let buffer = if let Some(ref path) = file_path {
-            match std::fs::read_to_string(path) {
+            match crate::file_io::read_file(std::path::Path::new(path)) {
                 Ok(content) => TextBuffer::from_text(&content),
-                Err(_) => TextBuffer::new(),
+                Err(e) => {
+                    tracing::warn!("Could not read {}: {}", path, e);
+                    TextBuffer::new()
+                }
             }
         } else {
             TextBuffer::from_text(

@@ -2,6 +2,7 @@
 mod app;
 mod buffer;
 mod editor;
+mod file_io;
 mod renderer;
 mod vim;
 
