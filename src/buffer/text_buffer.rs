@@ -1,19 +1,22 @@
 // src/buffer/text_buffer.rs
 use ropey::{Rope, RopeSlice};
 
+use crate::buffer::history::{EditAction, History, UndoEntry};
+
 pub struct TextBuffer {
     rope: Rope,
     cursor_line: usize,
     cursor_col: usize,
+    history: History,
 }
 
 impl TextBuffer {
     pub fn new() -> Self {
-        Self { rope: Rope::new(), cursor_line: 0, cursor_col: 0 }
+        Self { rope: Rope::new(), cursor_line: 0, cursor_col: 0, history: History::new() }
     }
 
     pub fn from_text(text: &str) -> Self {
-        Self { rope: Rope::from_str(text), cursor_line: 0, cursor_col: 0 }
+        Self { rope: Rope::from_str(text), cursor_line: 0, cursor_col: 0, history: History::new() }
     }
 
     pub fn cursor_line(&self) -> usize { self.cursor_line }
@@ -76,15 +79,29 @@ impl TextBuffer {
 
     pub fn insert_char(&mut self, ch: char) {
         let offset = self.cursor_offset();
+        self.history.push(EditAction::Insert {
+            offset,
+            text: ch.to_string(),
+        });
         self.rope.insert_char(offset, ch);
-        if ch == '\n' { self.cursor_line += 1; self.cursor_col = 0; }
-        else { self.cursor_col += 1; }
+        if ch == '\n' {
+            self.cursor_line += 1;
+            self.cursor_col = 0;
+        } else {
+            self.cursor_col += 1;
+        }
     }
 
     pub fn delete_char_before_cursor(&mut self) {
         let offset = self.cursor_offset();
-        if offset == 0 { return; }
+        if offset == 0 {
+            return;
+        }
         let ch = self.rope.char(offset - 1);
+        self.history.push(EditAction::Delete {
+            offset: offset - 1,
+            text: ch.to_string(),
+        });
         self.rope.remove(offset - 1..offset);
         if ch == '\n' {
             self.cursor_line -= 1;
@@ -96,16 +113,105 @@ impl TextBuffer {
 
     pub fn delete_char_at_cursor(&mut self) {
         let offset = self.cursor_offset();
-        if offset >= self.rope.len_chars() { return; }
+        if offset >= self.rope.len_chars() {
+            return;
+        }
+        let ch = self.rope.char(offset);
+        self.history.push(EditAction::Delete {
+            offset,
+            text: ch.to_string(),
+        });
         self.rope.remove(offset..offset + 1);
     }
 
     pub fn delete_range(&mut self, start: usize, end: usize) {
+        let text = self.rope.slice(start..end).to_string();
+        self.history.push(EditAction::Delete {
+            offset: start,
+            text,
+        });
         self.rope.remove(start..end);
     }
 
     pub fn insert_text_at(&mut self, offset: usize, text: &str) {
+        self.history.push(EditAction::Insert {
+            offset,
+            text: text.to_string(),
+        });
         self.rope.insert(offset, text);
+    }
+
+    /// Begin an undo group. All edits until end_undo_group() will be a single undo unit.
+    /// Call when entering Insert mode.
+    pub fn begin_undo_group(&mut self) {
+        self.history.begin_group();
+    }
+
+    /// End the current undo group. Call when leaving Insert mode (Escape).
+    pub fn end_undo_group(&mut self) {
+        self.history.end_group();
+    }
+
+    fn replay_action_undo(&mut self, action: &EditAction) {
+        match action {
+            EditAction::Insert { offset, text } => {
+                self.rope.remove(*offset..*offset + text.chars().count());
+                self.update_cursor_from_offset(*offset);
+            }
+            EditAction::Delete { offset, text } => {
+                self.rope.insert(*offset, text);
+                self.update_cursor_from_offset(*offset + text.chars().count());
+            }
+        }
+    }
+
+    fn replay_action_redo(&mut self, action: &EditAction) {
+        match action {
+            EditAction::Insert { offset, text } => {
+                self.rope.insert(*offset, text);
+                self.update_cursor_from_offset(*offset + text.chars().count());
+            }
+            EditAction::Delete { offset, text } => {
+                self.rope.remove(*offset..*offset + text.chars().count());
+                self.update_cursor_from_offset(*offset);
+            }
+        }
+    }
+
+    pub fn undo(&mut self) {
+        self.history.set_recording(false);
+        if let Some(entry) = self.history.undo() {
+            match entry {
+                UndoEntry::Single(action) => {
+                    self.replay_action_undo(&action);
+                }
+                UndoEntry::Group(actions) => {
+                    // Replay in reverse order to undo a group
+                    for action in actions.iter().rev() {
+                        self.replay_action_undo(action);
+                    }
+                }
+            }
+        }
+        self.history.set_recording(true);
+    }
+
+    pub fn redo(&mut self) {
+        self.history.set_recording(false);
+        if let Some(entry) = self.history.redo() {
+            match entry {
+                UndoEntry::Single(action) => {
+                    self.replay_action_redo(&action);
+                }
+                UndoEntry::Group(actions) => {
+                    // Replay in forward order to redo a group
+                    for action in actions.iter() {
+                        self.replay_action_redo(action);
+                    }
+                }
+            }
+        }
+        self.history.set_recording(true);
     }
 }
 
@@ -254,5 +360,85 @@ mod tests {
         assert_eq!(buf.line_count(), 1);
         buf.delete_char_before_cursor(); // should not panic
         buf.delete_char_at_cursor(); // should not panic
+    }
+
+    // --- Undo/Redo tests ---
+
+    #[test]
+    fn undo_insert() {
+        let mut buf = TextBuffer::new();
+        buf.insert_char('a');
+        buf.insert_char('b');
+        assert_eq!(buf.text(), "ab");
+        buf.undo();
+        assert_eq!(buf.text(), "a");
+        buf.undo();
+        assert_eq!(buf.text(), "");
+    }
+
+    #[test]
+    fn redo_after_undo() {
+        let mut buf = TextBuffer::new();
+        buf.insert_char('a');
+        buf.undo();
+        assert_eq!(buf.text(), "");
+        buf.redo();
+        assert_eq!(buf.text(), "a");
+    }
+
+    #[test]
+    fn undo_delete_range() {
+        let mut buf = TextBuffer::from_text("hello world");
+        buf.delete_range(5, 11);
+        assert_eq!(buf.text(), "hello");
+        buf.undo();
+        assert_eq!(buf.text(), "hello world");
+    }
+
+    #[test]
+    fn undo_unicode() {
+        let mut buf = TextBuffer::new();
+        buf.insert_char('å');
+        buf.insert_char('ä');
+        assert_eq!(buf.text(), "åä");
+        buf.undo();
+        assert_eq!(buf.text(), "å");
+    }
+
+    #[test]
+    fn undo_group_undoes_entire_insert_session() {
+        let mut buf = TextBuffer::new();
+        // Simulate: enter insert mode, type "abc", escape
+        buf.begin_undo_group();
+        buf.insert_char('a');
+        buf.insert_char('b');
+        buf.insert_char('c');
+        buf.end_undo_group();
+
+        assert_eq!(buf.text(), "abc");
+        // Single undo should remove all three characters
+        buf.undo();
+        assert_eq!(buf.text(), "");
+        // Redo restores them all
+        buf.redo();
+        assert_eq!(buf.text(), "abc");
+    }
+
+    #[test]
+    fn undo_group_then_single() {
+        let mut buf = TextBuffer::new();
+        // First: a grouped insert session
+        buf.begin_undo_group();
+        buf.insert_char('a');
+        buf.insert_char('b');
+        buf.end_undo_group();
+        // Second: a single operator (e.g., dd)
+        buf.delete_range(0, 2);
+
+        assert_eq!(buf.text(), "");
+        buf.undo(); // undoes delete_range
+        assert_eq!(buf.text(), "ab");
+        buf.undo(); // undoes the entire insert group
+        assert_eq!(buf.text(), "");
     }
 }
