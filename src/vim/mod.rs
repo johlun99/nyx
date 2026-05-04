@@ -1,8 +1,8 @@
 pub mod action;
 pub mod mode;
 mod keyparser;
-mod motion;
-mod operator;
+pub(crate) mod motion;
+pub(crate) mod operator;
 pub mod command;
 
 pub use action::*;

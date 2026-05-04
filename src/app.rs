@@ -1,35 +1,125 @@
 // src/app.rs
-use crate::buffer::TextBuffer;
+use eframe::egui;
+use crate::editor::Editor;
 use crate::renderer::{EditorView, Theme};
-use crate::vim::mode::Mode;
+use crate::vim::Mode;
 
 pub struct NyxApp {
-    buffer: TextBuffer,
+    editor: Editor,
     editor_view: EditorView,
     theme: Theme,
-    mode: Mode,
 }
 
 impl NyxApp {
-    pub fn new() -> Self {
+    pub fn new(file_path: Option<String>) -> Self {
         Self {
-            buffer: TextBuffer::from_text(
-                "Welcome to Nyx!\n\nPress i to enter insert mode.\nPress : for commands.\nPress :q to quit.\n"
-            ),
+            editor: Editor::new(file_path),
             editor_view: EditorView::new(),
             theme: Theme::default_dark(),
-            mode: Mode::Normal,
         }
+    }
+
+    fn handle_input(&mut self, ctx: &egui::Context) {
+        ctx.input(|input| {
+            // Command mode intercepts all input
+            if self.editor.mode() == Mode::Command {
+                if input.key_pressed(egui::Key::Enter) {
+                    self.editor.execute_command();
+                    return;
+                }
+                if input.key_pressed(egui::Key::Backspace) {
+                    self.editor.handle_command_backspace();
+                    return;
+                }
+                if input.key_pressed(egui::Key::Escape)
+                    || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
+                {
+                    self.editor.command_input.clear();
+                    let action = self.editor.key_parser.handle_escape();
+                    self.editor.apply_action(action);
+                    return;
+                }
+                for event in &input.events {
+                    if let egui::Event::Text(text) = event {
+                        for ch in text.chars() {
+                            self.editor.handle_command_char(ch);
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Escape and Ctrl+[ (both exit to Normal mode)
+            if input.key_pressed(egui::Key::Escape)
+                || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
+            {
+                let action = self.editor.key_parser.handle_escape();
+                self.editor.apply_action(action);
+                return;
+            }
+
+            // Ctrl+R for redo — only in Normal mode
+            if self.editor.mode() == Mode::Normal
+                && input.modifiers.ctrl
+                && input.key_pressed(egui::Key::R)
+            {
+                let action = self.editor.key_parser.handle_ctrl_r();
+                self.editor.apply_action(action);
+                return;
+            }
+
+            // Backspace
+            if input.key_pressed(egui::Key::Backspace) {
+                let action = self.editor.key_parser.handle_backspace();
+                self.editor.apply_action(action);
+                return;
+            }
+
+            // Enter
+            if input.key_pressed(egui::Key::Enter) {
+                if self.editor.mode() == Mode::Insert {
+                    self.editor.buffer.insert_char('\n');
+                } else if self.editor.mode() == Mode::Normal {
+                    let action = self.editor.key_parser.handle_key('j');
+                    self.editor.apply_action(action);
+                }
+                return;
+            }
+
+            // Text input
+            for event in &input.events {
+                if let egui::Event::Text(text) = event {
+                    for ch in text.chars() {
+                        let action = self.editor.key_parser.handle_key(ch);
+                        self.editor.apply_action(action);
+                    }
+                }
+            }
+        });
     }
 }
 
 impl eframe::App for NyxApp {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        eframe::egui::CentralPanel::default()
-            .frame(eframe::egui::Frame::NONE)
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_input(ctx);
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
+                let command_input = if self.editor.mode() == Mode::Command {
+                    Some(self.editor.command_input.as_str())
+                } else {
+                    None
+                };
                 self.editor_view.render(
-                    ui, &self.buffer, &self.theme, self.mode, 14.0, None, None, None,
+                    ui,
+                    &self.editor.buffer,
+                    &self.theme,
+                    self.editor.mode(),
+                    14.0,
+                    self.editor.file_path.as_deref(),
+                    command_input,
+                    self.editor.status_message.as_deref(),
                 );
             });
     }
