@@ -34,11 +34,12 @@ impl KeyParser {
     }
 
     pub fn handle_key(&mut self, ch: char) -> VimAction {
-        match self.mode {
+        let action = match self.mode {
             Mode::Normal => self.handle_normal(ch),
             Mode::Insert => self.handle_insert(ch),
             Mode::Command => VimAction::Noop, // command input handled separately
-        }
+        };
+        action
     }
 
     pub fn handle_escape(&mut self) -> VimAction {
@@ -279,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_mode_gg_and_G() {
+    fn normal_mode_gg_and_big_g() {
         let mut parser = KeyParser::new();
         assert_eq!(parser.handle_key('g'), VimAction::Noop);
         assert_eq!(parser.handle_key('g'), VimAction::Motion(MotionKind::FileTop));
@@ -326,6 +327,26 @@ mod tests {
     #[test]
     fn no_count_returns_1() {
         let mut parser = KeyParser::new();
+        assert_eq!(parser.take_count(), 1);
+    }
+
+    #[test]
+    fn unrecognized_operator_target_resets_pending() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('d'), VimAction::Noop); // pending 'd'
+        assert_eq!(parser.handle_key('z'), VimAction::Noop); // unrecognized, clears pending
+        // Parser should be ready for new input
+        assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
+    }
+
+    #[test]
+    fn count_prefix_consumed_with_action() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('5');
+        parser.handle_key('j');
+        // After action dispatch, count should be available via take_count
+        assert_eq!(parser.take_count(), 5);
+        // Second take_count returns default 1
         assert_eq!(parser.take_count(), 1);
     }
 }
