@@ -8,7 +8,6 @@ pub struct StatusBar;
 impl StatusBar {
     /// Renders the status bar at the bottom. Returns the height consumed.
     pub fn render(
-        ui: &mut egui::Ui,
         painter: &egui::Painter,
         rect: egui::Rect,
         theme: &Theme,

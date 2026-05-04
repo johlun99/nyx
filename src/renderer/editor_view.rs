@@ -41,12 +41,12 @@ impl EditorView {
 
         // Status bar at bottom
         let status_height = StatusBar::render(
-            ui, &painter, rect, theme, &font_id, line_height,
+            &painter, rect, theme, &font_id, line_height,
             mode, file_path, command_input, status_message,
         );
 
         let editor_height = available.y - status_height;
-        let visible_lines = (editor_height / line_height) as usize;
+        let visible_lines = ((editor_height / line_height).ceil() as usize).max(1);
         let gutter_width = 50.0;
         let text_x = rect.min.x + gutter_width + 10.0;
 
