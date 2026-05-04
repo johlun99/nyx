@@ -1,5 +1,6 @@
 mod app;
 mod buffer;
+mod renderer;
 mod vim;
 
 fn main() -> eframe::Result<()> {
