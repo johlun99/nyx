@@ -2,10 +2,12 @@
 use crate::buffer::TextBuffer;
 use crate::vim::{KeyParser, VimAction, InsertEntry, Mode};
 use crate::vim::motion::execute_motion;
+use crate::vim::operator::OperatorEngine;
 
 pub struct Editor {
     pub buffer: TextBuffer,
     pub key_parser: KeyParser,
+    pub operator_engine: OperatorEngine,
     pub file_path: Option<String>,
     pub should_quit: bool,
     pub status_message: Option<String>,
@@ -28,6 +30,7 @@ impl Editor {
         Self {
             buffer,
             key_parser: KeyParser::new(),
+            operator_engine: OperatorEngine::new(),
             file_path,
             should_quit: false,
             status_message: None,
@@ -81,8 +84,18 @@ impl Editor {
                     self.buffer.redo();
                 }
             }
-            VimAction::Operator(_) | VimAction::Yank(_) | VimAction::Paste => {
-                // Handled in Task 8
+            VimAction::Operator(ref op_action) => {
+                for _ in 0..count {
+                    self.operator_engine.execute(&mut self.buffer, op_action);
+                }
+            }
+            VimAction::Yank(ref motion) => {
+                self.operator_engine.yank_motion(&mut self.buffer, motion);
+            }
+            VimAction::Paste => {
+                for _ in 0..count {
+                    self.operator_engine.paste(&mut self.buffer);
+                }
             }
             VimAction::Noop => unreachable!(),
         }
