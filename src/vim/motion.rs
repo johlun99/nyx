@@ -55,11 +55,19 @@ pub fn execute_motion(buffer: &mut TextBuffer, motion: &MotionKind) {
 }
 
 fn word_forward(buffer: &mut TextBuffer) {
-    let line = buffer.line_slice(buffer.cursor_line()).to_string();
-    let content: Vec<char> = line.trim_end_matches('\n').chars().collect();
-    let mut col = buffer.cursor_col();
+    let content_len = buffer.line_content_len(buffer.cursor_line());
+    let content: Vec<char> = buffer.line_slice(buffer.cursor_line())
+        .chars()
+        .take(content_len)
+        .collect();
 
-    // Skip current word
+    if content.is_empty() {
+        return;
+    }
+
+    let mut col = buffer.cursor_col().min(content.len().saturating_sub(1));
+
+    // Skip current word (whitespace-delimited, i.e. WORD motion)
     while col < content.len() && !content[col].is_whitespace() {
         col += 1;
     }
@@ -87,9 +95,17 @@ fn word_backward(buffer: &mut TextBuffer) {
         return;
     }
 
-    let line = buffer.line_slice(buffer.cursor_line()).to_string();
-    let content: Vec<char> = line.trim_end_matches('\n').chars().collect();
-    let mut c = col - 1;
+    let content_len = buffer.line_content_len(buffer.cursor_line());
+    let content: Vec<char> = buffer.line_slice(buffer.cursor_line())
+        .chars()
+        .take(content_len)
+        .collect();
+
+    if content.is_empty() {
+        return;
+    }
+
+    let mut c = (col - 1).min(content.len().saturating_sub(1));
 
     // Skip whitespace
     while c > 0 && content[c].is_whitespace() {
@@ -104,8 +120,11 @@ fn word_backward(buffer: &mut TextBuffer) {
 }
 
 fn word_end(buffer: &mut TextBuffer) {
-    let line = buffer.line_slice(buffer.cursor_line()).to_string();
-    let content: Vec<char> = line.trim_end_matches('\n').chars().collect();
+    let content_len = buffer.line_content_len(buffer.cursor_line());
+    let content: Vec<char> = buffer.line_slice(buffer.cursor_line())
+        .chars()
+        .take(content_len)
+        .collect();
     let mut col = buffer.cursor_col();
 
     if col >= content.len().saturating_sub(1) {
@@ -262,6 +281,48 @@ mod tests {
         execute_motion(&mut buf, &MotionKind::FileBottom);
         execute_motion(&mut buf, &MotionKind::LineEnd);
         assert_eq!(buf.cursor_line(), 0);
+        assert_eq!(buf.cursor_col(), 0);
+    }
+
+    #[test]
+    fn motion_word_backward_from_first_word_middle() {
+        let mut buf = TextBuffer::from_text("hello world");
+        buf.set_cursor(0, 2);
+        execute_motion(&mut buf, &MotionKind::WordBackward);
+        assert_eq!(buf.cursor_col(), 0);
+    }
+
+    #[test]
+    fn motion_word_backward_from_whitespace() {
+        let mut buf = TextBuffer::from_text("hello   world");
+        buf.set_cursor(0, 6); // on whitespace between words
+        execute_motion(&mut buf, &MotionKind::WordBackward);
+        assert_eq!(buf.cursor_col(), 0); // back to start of 'hello'
+    }
+
+    #[test]
+    fn motion_word_backward_at_line_start() {
+        let mut buf = TextBuffer::from_text("hello\nworld");
+        buf.set_cursor(1, 0);
+        execute_motion(&mut buf, &MotionKind::WordBackward);
+        assert_eq!(buf.cursor_line(), 0);
+        assert_eq!(buf.cursor_col(), 4); // end of 'hello'
+    }
+
+    #[test]
+    fn motion_word_forward_empty_line() {
+        let mut buf = TextBuffer::from_text("\nhello");
+        execute_motion(&mut buf, &MotionKind::WordForward);
+        // Should not panic on empty line
+        assert_eq!(buf.cursor_line(), 0);
+    }
+
+    #[test]
+    fn motion_on_empty_buffer_word_motions() {
+        let mut buf = TextBuffer::new();
+        execute_motion(&mut buf, &MotionKind::WordForward);
+        execute_motion(&mut buf, &MotionKind::WordBackward);
+        execute_motion(&mut buf, &MotionKind::WordEnd);
         assert_eq!(buf.cursor_col(), 0);
     }
 }
