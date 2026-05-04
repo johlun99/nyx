@@ -372,8 +372,10 @@ mod tests {
         assert_eq!(buf.text(), "ab");
         buf.undo();
         assert_eq!(buf.text(), "a");
+        assert_eq!(buf.cursor_col(), 1);
         buf.undo();
         assert_eq!(buf.text(), "");
+        assert_eq!(buf.cursor_col(), 0);
     }
 
     #[test]
@@ -416,12 +418,15 @@ mod tests {
         buf.end_undo_group();
 
         assert_eq!(buf.text(), "abc");
+        assert_eq!(buf.cursor_col(), 3);
         // Single undo should remove all three characters
         buf.undo();
         assert_eq!(buf.text(), "");
+        assert_eq!(buf.cursor_col(), 0);
         // Redo restores them all
         buf.redo();
         assert_eq!(buf.text(), "abc");
+        assert_eq!(buf.cursor_col(), 3);
     }
 
     #[test]

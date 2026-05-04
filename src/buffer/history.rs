@@ -1,7 +1,7 @@
 // src/buffer/history.rs
 
 #[derive(Clone, Debug)]
-pub enum EditAction {
+pub(crate) enum EditAction {
     Insert { offset: usize, text: String },
     Delete { offset: usize, text: String },
 }
@@ -9,12 +9,12 @@ pub enum EditAction {
 /// An undo entry is either a single edit or a group of edits (e.g., an entire Insert session).
 /// `undo()` always pops one UndoEntry, so a group is undone atomically.
 #[derive(Clone, Debug)]
-pub enum UndoEntry {
+pub(crate) enum UndoEntry {
     Single(EditAction),
     Group(Vec<EditAction>),
 }
 
-pub struct History {
+pub(crate) struct History {
     undo_stack: std::collections::VecDeque<UndoEntry>,
     redo_stack: Vec<UndoEntry>,
     /// Accumulates actions while an undo group is open (e.g., during Insert mode).
@@ -46,6 +46,10 @@ impl History {
     /// Begin an undo group. All subsequent push() calls accumulate into this group
     /// until end_group() is called. Used when entering Insert mode.
     pub fn begin_group(&mut self) {
+        debug_assert!(
+            self.current_group.is_none(),
+            "begin_group called while a group is already open"
+        );
         if self.current_group.is_none() {
             self.current_group = Some(Vec::new());
         }
@@ -91,6 +95,12 @@ impl History {
         let entry = self.redo_stack.pop()?;
         self.undo_stack.push_back(entry.clone());
         Some(entry)
+    }
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
