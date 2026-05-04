@@ -14,7 +14,13 @@ Thumbs.db
 
 # Claude
 .claude/
+CLAUDE.md
 
 # Environment
 .env
 .env.*
+
+
+# Added by cargo
+
+/target
