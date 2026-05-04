@@ -78,7 +78,8 @@ impl NyxApp {
             // Enter
             if input.key_pressed(egui::Key::Enter) {
                 if self.editor.mode() == Mode::Insert {
-                    self.editor.buffer.insert_char('\n');
+                    let action = self.editor.key_parser.handle_key('\n');
+                    self.editor.apply_action(action);
                 } else if self.editor.mode() == Mode::Normal {
                     let action = self.editor.key_parser.handle_key('j');
                     self.editor.apply_action(action);
@@ -101,6 +102,11 @@ impl NyxApp {
 
 impl eframe::App for NyxApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.editor.should_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
         self.handle_input(ctx);
 
         egui::CentralPanel::default()
