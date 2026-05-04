@@ -2,6 +2,7 @@ use crate::buffer::TextBuffer;
 use crate::vim::action::{MotionKind, OperatorAction};
 use crate::vim::motion::execute_motion;
 
+#[derive(Default)]
 pub struct OperatorEngine {
     pub clipboard: String,
 }
@@ -26,20 +27,8 @@ impl OperatorEngine {
                     0,
                 );
             }
-            OperatorAction::Delete(motion) => {
-                let start = buffer.cursor_offset();
-                execute_motion(buffer, motion);
-                let end = buffer.cursor_offset();
-                let (from, to) = if start < end {
-                    (start, end)
-                } else {
-                    (end, start)
-                };
-                if from < to {
-                    self.clipboard = buffer.slice(from, to);
-                    buffer.delete_range(from, to);
-                    buffer.update_cursor_from_offset(from);
-                }
+            OperatorAction::Delete(motion) | OperatorAction::Change(motion) => {
+                self.delete_motion(buffer, motion);
             }
             OperatorAction::ChangeLine => {
                 let line = buffer.cursor_line();
@@ -51,27 +40,28 @@ impl OperatorEngine {
                 }
                 buffer.set_cursor(line, 0);
             }
-            OperatorAction::Change(motion) => {
-                let start = buffer.cursor_offset();
-                execute_motion(buffer, motion);
-                let end = buffer.cursor_offset();
-                let (from, to) = if start < end {
-                    (start, end)
-                } else {
-                    (end, start)
-                };
-                if from < to {
-                    self.clipboard = buffer.slice(from, to);
-                    buffer.delete_range(from, to);
-                    buffer.update_cursor_from_offset(from);
-                }
-            }
             OperatorAction::YankLine => {
                 let line = buffer.cursor_line();
                 let line_start = buffer.cursor_offset() - buffer.cursor_col();
                 let line_char_len = buffer.line_len_chars(line);
                 self.clipboard = buffer.slice(line_start, line_start + line_char_len);
             }
+        }
+    }
+
+    fn delete_motion(&mut self, buffer: &mut TextBuffer, motion: &MotionKind) {
+        let start = buffer.cursor_offset();
+        execute_motion(buffer, motion);
+        let end = buffer.cursor_offset();
+        let (from, to) = if start < end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        if from < to {
+            self.clipboard = buffer.slice(from, to);
+            buffer.delete_range(from, to);
+            buffer.update_cursor_from_offset(from);
         }
     }
 
@@ -92,7 +82,7 @@ impl OperatorEngine {
         buffer.set_cursor(saved_line, saved_col);
     }
 
-    pub fn paste(&mut self, buffer: &mut TextBuffer) {
+    pub fn paste(&self, buffer: &mut TextBuffer) {
         if self.clipboard.is_empty() {
             return;
         }
@@ -175,5 +165,35 @@ mod tests {
         let mut engine = OperatorEngine::new();
         engine.execute(&mut buf, &OperatorAction::Delete(MotionKind::WordForward));
         assert_eq!(buf.text(), "världen");
+    }
+
+    #[test]
+    fn change_word() {
+        let mut buf = TextBuffer::from_text("hello world");
+        let mut engine = OperatorEngine::new();
+        engine.execute(&mut buf, &OperatorAction::Change(MotionKind::WordForward));
+        assert_eq!(buf.text(), "world");
+        assert_eq!(engine.clipboard, "hello ");
+    }
+
+    #[test]
+    fn yank_motion_preserves_cursor() {
+        let mut buf = TextBuffer::from_text("hello world");
+        buf.set_cursor(0, 0);
+        let mut engine = OperatorEngine::new();
+        engine.yank_motion(&mut buf, &MotionKind::WordForward);
+        assert_eq!(engine.clipboard, "hello ");
+        assert_eq!(buf.cursor_col(), 0);
+    }
+
+    #[test]
+    fn paste_inline() {
+        let mut buf = TextBuffer::from_text("hello world");
+        let mut engine = OperatorEngine::new();
+        engine.execute(&mut buf, &OperatorAction::Delete(MotionKind::WordForward));
+        assert_eq!(buf.text(), "world");
+        engine.paste(&mut buf);
+        // Inline paste inserts after cursor (offset 0+1=1)
+        assert_eq!(buf.text(), "whello orld");
     }
 }
