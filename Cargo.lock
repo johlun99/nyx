@@ -1950,6 +1950,7 @@ dependencies = [
 name = "nyx"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "dirs",
  "eframe",
  "ropey",
