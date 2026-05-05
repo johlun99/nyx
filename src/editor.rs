@@ -1,6 +1,7 @@
 // src/editor.rs
 use crate::buffer::TextBuffer;
 use crate::vim::{KeyParser, VimAction, InsertEntry, Mode};
+use crate::vim::command::{CommandParser, CommandResult};
 use crate::vim::motion::execute_motion;
 use crate::vim::operator::OperatorEngine;
 
@@ -11,7 +12,7 @@ pub struct Editor {
     pub file_path: Option<String>,
     pub should_quit: bool,
     pub status_message: Option<String>,
-    pub command_input: String,
+    pub command_parser: CommandParser,
 }
 
 impl Editor {
@@ -37,7 +38,7 @@ impl Editor {
             file_path,
             should_quit: false,
             status_message: None,
-            command_input: String::new(),
+            command_parser: CommandParser::new(),
         }
     }
 
@@ -140,23 +141,62 @@ impl Editor {
         }
     }
 
-    // Command mode stubs (implemented in Task 9)
-    pub fn execute_command(&mut self) {
-        self.status_message = Some(format!("Unknown command: {}", self.command_input));
-        self.command_input.clear();
-        let action = self.key_parser.handle_escape();
-        self.apply_action(action);
+    pub fn command_input(&self) -> Option<&str> {
+        if self.key_parser.mode() == Mode::Command {
+            Some(&self.command_parser.input)
+        } else {
+            None
+        }
+    }
+
+    pub fn handle_command_char(&mut self, ch: char) {
+        self.command_parser.push_char(ch);
     }
 
     pub fn handle_command_backspace(&mut self) {
-        self.command_input.pop();
-        if self.command_input.is_empty() {
+        self.command_parser.pop_char();
+        if self.command_parser.input.is_empty() {
             let action = self.key_parser.handle_escape();
             self.apply_action(action);
         }
     }
 
-    pub fn handle_command_char(&mut self, ch: char) {
-        self.command_input.push(ch);
+    pub fn execute_command(&mut self) {
+        let result = self.command_parser.execute();
+        match result {
+            CommandResult::Quit | CommandResult::ForceQuit => {
+                self.should_quit = true;
+            }
+            CommandResult::Write => {
+                self.save_file();
+            }
+            CommandResult::WriteQuit => {
+                self.save_file();
+                self.should_quit = true;
+            }
+            CommandResult::Unknown(cmd) => {
+                self.status_message = Some(format!("Unknown command: {}", cmd));
+            }
+        }
+        self.command_parser.clear();
+        let action = self.key_parser.handle_escape();
+        self.apply_action(action);
+    }
+
+    fn save_file(&mut self) {
+        if let Some(ref path) = self.file_path {
+            match crate::file_io::write_file(std::path::Path::new(path), &self.buffer.text()) {
+                Ok(_) => {
+                    self.status_message = Some(format!("Written: {}", path));
+                    tracing::info!("File saved: {}", path);
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("Error writing {}: {}", path, e));
+                    tracing::error!("Failed to save {}: {}", path, e);
+                }
+            }
+        } else {
+            self.status_message = Some("No file path".to_string());
+        }
     }
 }

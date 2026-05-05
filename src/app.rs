@@ -34,7 +34,7 @@ impl NyxApp {
                 if input.key_pressed(egui::Key::Escape)
                     || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
                 {
-                    self.editor.command_input.clear();
+                    self.editor.command_parser.clear();
                     let action = self.editor.key_parser.handle_escape();
                     self.editor.apply_action(action);
                     return;
@@ -112,11 +112,7 @@ impl eframe::App for NyxApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
-                let command_input = if self.editor.mode() == Mode::Command {
-                    Some(self.editor.command_input.as_str())
-                } else {
-                    None
-                };
+                let command_input = self.editor.command_input();
                 self.editor_view.render(
                     ui,
                     &self.editor.buffer,
