@@ -169,11 +169,13 @@ impl Editor {
             }
             VimAction::Operator(ref op_action) => {
                 for _ in 0..count {
-                    self.operator_engine.execute(&mut self.buffer, op_action, register);
+                    self.operator_engine
+                        .execute(&mut self.buffer, op_action, register);
                 }
             }
             VimAction::Yank(ref motion) => {
-                self.operator_engine.yank_motion(&mut self.buffer, motion, register);
+                self.operator_engine
+                    .yank_motion(&mut self.buffer, motion, register);
             }
             VimAction::Paste => {
                 for _ in 0..count {
@@ -193,19 +195,25 @@ impl Editor {
 
                     match vis_op {
                         VisualOperatorAction::Delete => {
-                            self.operator_engine.registers.set(register, content, was_visual_line);
+                            self.operator_engine
+                                .registers
+                                .set(register, content, was_visual_line);
                             self.buffer.delete_range(start, end);
                             self.buffer.update_cursor_from_offset(start);
                             self.buffer.clamp_cursor_normal();
                         }
                         VisualOperatorAction::Change => {
-                            self.operator_engine.registers.set(register, content, was_visual_line);
+                            self.operator_engine
+                                .registers
+                                .set(register, content, was_visual_line);
                             self.buffer.delete_range(start, end);
                             self.buffer.update_cursor_from_offset(start);
                             self.buffer.begin_undo_group();
                         }
                         VisualOperatorAction::Yank => {
-                            self.operator_engine.registers.set(register, content, was_visual_line);
+                            self.operator_engine
+                                .registers
+                                .set(register, content, was_visual_line);
                             self.buffer.update_cursor_from_offset(start);
                             self.buffer.clamp_cursor_normal();
                         }

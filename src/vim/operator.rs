@@ -16,7 +16,12 @@ impl OperatorEngine {
         }
     }
 
-    pub fn execute(&mut self, buffer: &mut TextBuffer, action: &OperatorAction, register: Option<char>) {
+    pub fn execute(
+        &mut self,
+        buffer: &mut TextBuffer,
+        action: &OperatorAction,
+        register: Option<char>,
+    ) {
         match action {
             OperatorAction::DeleteLine => {
                 let line = buffer.cursor_line();
@@ -78,7 +83,12 @@ impl OperatorEngine {
         }
     }
 
-    fn delete_motion(&mut self, buffer: &mut TextBuffer, motion: &MotionKind, register: Option<char>) {
+    fn delete_motion(
+        &mut self,
+        buffer: &mut TextBuffer,
+        motion: &MotionKind,
+        register: Option<char>,
+    ) {
         let start = buffer.cursor_offset();
         execute_motion(buffer, motion);
         let end = buffer.cursor_offset();
@@ -95,7 +105,12 @@ impl OperatorEngine {
         }
     }
 
-    pub fn yank_motion(&mut self, buffer: &mut TextBuffer, motion: &MotionKind, register: Option<char>) {
+    pub fn yank_motion(
+        &mut self,
+        buffer: &mut TextBuffer,
+        motion: &MotionKind,
+        register: Option<char>,
+    ) {
         let start = buffer.cursor_offset();
         let saved_line = buffer.cursor_line();
         let saved_col = buffer.cursor_col();
@@ -161,7 +176,11 @@ mod tests {
     fn delete_word() {
         let mut buf = TextBuffer::from_text("hello world");
         let mut engine = OperatorEngine::new();
-        engine.execute(&mut buf, &OperatorAction::Delete(MotionKind::WordForward), None);
+        engine.execute(
+            &mut buf,
+            &OperatorAction::Delete(MotionKind::WordForward),
+            None,
+        );
         assert_eq!(buf.text(), "world");
     }
 
@@ -196,7 +215,11 @@ mod tests {
     fn delete_word_unicode() {
         let mut buf = TextBuffer::from_text("hej världen");
         let mut engine = OperatorEngine::new();
-        engine.execute(&mut buf, &OperatorAction::Delete(MotionKind::WordForward), None);
+        engine.execute(
+            &mut buf,
+            &OperatorAction::Delete(MotionKind::WordForward),
+            None,
+        );
         assert_eq!(buf.text(), "världen");
     }
 
@@ -204,7 +227,11 @@ mod tests {
     fn change_word() {
         let mut buf = TextBuffer::from_text("hello world");
         let mut engine = OperatorEngine::new();
-        engine.execute(&mut buf, &OperatorAction::Change(MotionKind::WordForward), None);
+        engine.execute(
+            &mut buf,
+            &OperatorAction::Change(MotionKind::WordForward),
+            None,
+        );
         assert_eq!(buf.text(), "world");
         assert_eq!(engine.registers.get(None).content, "hello ");
     }
@@ -223,7 +250,11 @@ mod tests {
     fn paste_inline() {
         let mut buf = TextBuffer::from_text("hello world");
         let mut engine = OperatorEngine::new();
-        engine.execute(&mut buf, &OperatorAction::Delete(MotionKind::WordForward), None);
+        engine.execute(
+            &mut buf,
+            &OperatorAction::Delete(MotionKind::WordForward),
+            None,
+        );
         assert_eq!(buf.text(), "world");
         engine.paste(&mut buf, None);
         // Inline paste inserts after cursor (offset 0+1=1)

@@ -1,5 +1,5 @@
-use crate::vim::action::*;
 use crate::vim::action::SearchDirection;
+use crate::vim::action::*;
 use crate::vim::mode::Mode;
 use crate::vim::text_object::{TextObject, TextObjectKind};
 
@@ -595,9 +595,9 @@ mod tests {
         assert_eq!(parser.handle_key('i'), VimAction::Noop);
         assert_eq!(
             parser.handle_key('w'),
-            VimAction::Operator(OperatorAction::DeleteTextObject(
-                TextObject::Inner(TextObjectKind::Word)
-            ))
+            VimAction::Operator(OperatorAction::DeleteTextObject(TextObject::Inner(
+                TextObjectKind::Word
+            )))
         );
     }
 
@@ -609,9 +609,9 @@ mod tests {
         let action = parser.handle_key('"');
         assert_eq!(
             action,
-            VimAction::Operator(OperatorAction::ChangeTextObject(
-                TextObject::Inner(TextObjectKind::DoubleQuote)
-            ))
+            VimAction::Operator(OperatorAction::ChangeTextObject(TextObject::Inner(
+                TextObjectKind::DoubleQuote
+            )))
         );
         assert_eq!(parser.mode(), Mode::Insert);
     }
@@ -624,9 +624,9 @@ mod tests {
         let action = parser.handle_key('(');
         assert_eq!(
             action,
-            VimAction::Operator(OperatorAction::YankTextObject(
-                TextObject::Around(TextObjectKind::Paren)
-            ))
+            VimAction::Operator(OperatorAction::YankTextObject(TextObject::Around(
+                TextObjectKind::Paren
+            )))
         );
     }
 
@@ -636,7 +636,7 @@ mod tests {
         parser.handle_key('d');
         parser.handle_key('i');
         assert_eq!(parser.handle_key('z'), VimAction::Noop); // invalid object
-        // Parser should be clean
+                                                             // Parser should be clean
         assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
     }
 
@@ -661,7 +661,10 @@ mod tests {
         let mut parser = KeyParser::new();
         parser.handle_key('v');
         let action = parser.handle_key('d');
-        assert_eq!(action, VimAction::VisualOperator(VisualOperatorAction::Delete));
+        assert_eq!(
+            action,
+            VimAction::VisualOperator(VisualOperatorAction::Delete)
+        );
         assert_eq!(parser.mode(), Mode::Normal);
     }
 
@@ -670,7 +673,10 @@ mod tests {
         let mut parser = KeyParser::new();
         parser.handle_key('v');
         let action = parser.handle_key('y');
-        assert_eq!(action, VimAction::VisualOperator(VisualOperatorAction::Yank));
+        assert_eq!(
+            action,
+            VimAction::VisualOperator(VisualOperatorAction::Yank)
+        );
         assert_eq!(parser.mode(), Mode::Normal);
     }
 
@@ -679,7 +685,10 @@ mod tests {
         let mut parser = KeyParser::new();
         parser.handle_key('v');
         let action = parser.handle_key('c');
-        assert_eq!(action, VimAction::VisualOperator(VisualOperatorAction::Change));
+        assert_eq!(
+            action,
+            VimAction::VisualOperator(VisualOperatorAction::Change)
+        );
         assert_eq!(parser.mode(), Mode::Insert);
     }
 
@@ -705,7 +714,10 @@ mod tests {
         let mut parser = KeyParser::new();
         parser.handle_key('v');
         assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
-        assert_eq!(parser.handle_key('w'), VimAction::Motion(MotionKind::WordForward));
+        assert_eq!(
+            parser.handle_key('w'),
+            VimAction::Motion(MotionKind::WordForward)
+        );
     }
 
     #[test]

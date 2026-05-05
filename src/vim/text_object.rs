@@ -186,8 +186,7 @@ fn resolve_inner_quote(chars: &[char], offset: usize, quote: char) -> Option<(us
         .find(|&i| line_chars[i] == quote)?;
 
     // Find closing quote: leftmost quote strictly after open
-    let close_in_line = (open_in_line + 1..line_chars.len())
-        .find(|&i| line_chars[i] == quote)?;
+    let close_in_line = (open_in_line + 1..line_chars.len()).find(|&i| line_chars[i] == quote)?;
 
     // Cursor must be within [open, close] (inclusive) to be considered inside
     if cursor_in_line > close_in_line {

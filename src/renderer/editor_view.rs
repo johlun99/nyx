@@ -14,13 +14,7 @@ impl EditorView {
         Self { scroll_offset: 0 }
     }
 
-    pub fn render(
-        &mut self,
-        ui: &mut egui::Ui,
-        editor: &Editor,
-        theme: &Theme,
-        font_size: f32,
-    ) {
+    pub fn render(&mut self, ui: &mut egui::Ui, editor: &Editor, theme: &Theme, font_size: f32) {
         let buffer = &editor.buffer;
         let mode = editor.mode();
         let file_path = editor.file_path.as_deref();
@@ -85,8 +79,7 @@ impl EditorView {
             );
 
             // Search match highlights (drawn before text so text is visible on top)
-            for (match_start_col, match_end_col, is_current) in
-                editor.search_highlights_for_line(i)
+            for (match_start_col, match_end_col, is_current) in editor.search_highlights_for_line(i)
             {
                 let match_x_start: f32 = if match_start_col == 0 {
                     0.0
