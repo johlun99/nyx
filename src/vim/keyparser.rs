@@ -248,6 +248,9 @@ impl KeyParser {
                 VimAction::Noop
             }
 
+            // Dot-repeat
+            '.' => VimAction::DotRepeat,
+
             _ => VimAction::Noop,
         }
     }
@@ -695,5 +698,11 @@ mod tests {
         parser.handle_key('v');
         assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
         assert_eq!(parser.handle_key('w'), VimAction::Motion(MotionKind::WordForward));
+    }
+
+    #[test]
+    fn dot_emits_dot_repeat() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('.'), VimAction::DotRepeat);
     }
 }

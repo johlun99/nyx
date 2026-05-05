@@ -17,6 +17,7 @@ pub enum VimAction {
     EnterVisual(VisualKind),
     VisualOperator(VisualOperatorAction),
     SwapVisualAnchor,
+    DotRepeat,
     Noop,
 }
 

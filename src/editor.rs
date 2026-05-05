@@ -5,6 +5,13 @@ use crate::vim::motion::execute_motion;
 use crate::vim::operator::OperatorEngine;
 use crate::vim::{InsertEntry, KeyParser, Mode, VimAction, VisualOperatorAction};
 
+#[derive(Debug, Clone)]
+pub struct LastAction {
+    pub entry: Option<InsertEntry>,
+    pub actions: Vec<VimAction>,
+    pub count: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct VisualAnchor {
     pub line: usize,
@@ -20,6 +27,9 @@ pub struct Editor {
     pub status_message: Option<String>,
     pub command_parser: CommandParser,
     pub visual_anchor: Option<VisualAnchor>,
+    pub last_action: Option<LastAction>,
+    recording_action: Option<LastAction>,
+    replaying: bool,
 }
 
 impl Editor {
@@ -47,6 +57,9 @@ impl Editor {
             status_message: None,
             command_parser: CommandParser::new(),
             visual_anchor: None,
+            last_action: None,
+            recording_action: None,
+            replaying: false,
         }
     }
 
@@ -62,6 +75,39 @@ impl Editor {
 
         let count = self.key_parser.take_count();
         let register = self.key_parser.take_register();
+
+        // Record for dot-repeat (skip during replay)
+        if !self.replaying {
+            match &action {
+                VimAction::Operator(_) | VimAction::VisualOperator(_) => {
+                    self.last_action = Some(LastAction {
+                        entry: None,
+                        actions: vec![action.clone()],
+                        count,
+                    });
+                    self.recording_action = None;
+                }
+                VimAction::EnterInsert(entry) => {
+                    self.recording_action = Some(LastAction {
+                        entry: Some(entry.clone()),
+                        actions: vec![],
+                        count: 1,
+                    });
+                }
+                VimAction::InsertChar(_) | VimAction::DeleteCharBefore => {
+                    if let Some(ref mut rec) = self.recording_action {
+                        rec.actions.push(action.clone());
+                    }
+                }
+                VimAction::SwitchMode(Mode::Normal) => {
+                    if let Some(rec) = self.recording_action.take() {
+                        self.last_action = Some(rec);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         match action {
             VimAction::SwitchMode(Mode::Normal) => {
                 self.visual_anchor = None;
@@ -153,6 +199,31 @@ impl Editor {
                     anchor.line = self.buffer.cursor_line();
                     anchor.col = self.buffer.cursor_col();
                     self.buffer.set_cursor(old_anchor_line, old_anchor_col);
+                }
+            }
+            VimAction::DotRepeat => {
+                if let Some(ref last) = self.last_action.clone() {
+                    self.replaying = true;
+                    let repeat_count = if count > 1 { count } else { last.count };
+
+                    if let Some(ref entry) = last.entry.clone() {
+                        // Insert session replay
+                        for _ in 0..repeat_count {
+                            self.apply_action(VimAction::EnterInsert(entry.clone()));
+                            for a in last.actions.clone() {
+                                self.apply_action(a);
+                            }
+                            self.apply_action(VimAction::SwitchMode(Mode::Normal));
+                        }
+                    } else {
+                        // Operator replay
+                        for a in last.actions.clone() {
+                            for _ in 0..repeat_count {
+                                self.apply_action(a.clone());
+                            }
+                        }
+                    }
+                    self.replaying = false;
                 }
             }
             VimAction::Noop => unreachable!(),
@@ -368,5 +439,60 @@ impl Editor {
         } else {
             self.status_message = Some("No file path".to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vim::action::*;
+
+    #[test]
+    fn dot_repeat_operator() {
+        let mut editor = Editor::new(None);
+        editor.buffer = TextBuffer::from_text("hello\nworld\nfoo");
+        editor.buffer.set_cursor(0, 0);
+
+        // dd deletes first line
+        editor.apply_action(VimAction::Operator(OperatorAction::DeleteLine));
+        assert_eq!(editor.buffer.text(), "world\nfoo");
+
+        // . repeats dd
+        editor.apply_action(VimAction::DotRepeat);
+        assert_eq!(editor.buffer.text(), "foo");
+    }
+
+    #[test]
+    fn dot_repeat_insert_session() {
+        let mut editor = Editor::new(None);
+        editor.buffer = TextBuffer::from_text("hello");
+        editor.buffer.set_cursor(0, 4); // on 'o'
+
+        // A (append at end) + type "!" + Escape
+        editor.apply_action(VimAction::EnterInsert(InsertEntry::EndOfLine));
+        editor.apply_action(VimAction::InsertChar('!'));
+        editor.apply_action(VimAction::SwitchMode(Mode::Normal));
+        assert_eq!(editor.buffer.text(), "hello!");
+
+        // Move to another position and dot-repeat
+        editor.buffer.set_cursor(0, 0);
+        editor.apply_action(VimAction::DotRepeat);
+        assert_eq!(editor.buffer.text(), "hello!!");
+    }
+
+    #[test]
+    fn dot_repeat_with_count_override() {
+        let mut editor = Editor::new(None);
+        editor.buffer = TextBuffer::from_text("aaa\nbbb\nccc\nddd");
+        editor.buffer.set_cursor(0, 0);
+
+        // dd (count=1)
+        editor.apply_action(VimAction::Operator(OperatorAction::DeleteLine));
+        assert_eq!(editor.buffer.line_count(), 3);
+
+        // 2. should repeat dd twice
+        editor.key_parser.handle_key('2');
+        editor.apply_action(VimAction::DotRepeat);
+        assert_eq!(editor.buffer.text(), "ddd");
     }
 }
