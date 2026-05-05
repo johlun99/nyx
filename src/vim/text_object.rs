@@ -155,12 +155,52 @@ fn resolve_around(
     }
 }
 
-fn resolve_inner_quote(_chars: &[char], _offset: usize, _quote: char) -> Option<(usize, usize)> {
-    None // Implemented in Task 5
+fn resolve_inner_quote(chars: &[char], offset: usize, quote: char) -> Option<(usize, usize)> {
+    // Find the line boundaries (quotes are line-local)
+    let line_start = chars[..offset]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map(|p| p + 1)
+        .unwrap_or(0);
+    let line_end = chars[offset..]
+        .iter()
+        .position(|&c| c == '\n')
+        .map(|p| offset + p)
+        .unwrap_or(chars.len());
+
+    let line_chars = &chars[line_start..line_end];
+    let cursor_in_line = offset - line_start;
+
+    // Strategy: find the nearest quote at or before the cursor (open candidate),
+    // then find the next quote after it (close candidate). If the cursor sits
+    // between them, that is the enclosing pair.
+    //
+    // Walk backward from the cursor to find the opening quote, then forward
+    // from the position after it to find the closing quote. This naturally
+    // handles lines with multiple independent pairs (e.g. "it's 'fine' now")
+    // by anchoring on the quote nearest to — and to the left of — the cursor.
+
+    // Find opening quote: rightmost quote at or before cursor position
+    let open_in_line = (0..=cursor_in_line)
+        .rev()
+        .find(|&i| line_chars[i] == quote)?;
+
+    // Find closing quote: leftmost quote strictly after open
+    let close_in_line = (open_in_line + 1..line_chars.len())
+        .find(|&i| line_chars[i] == quote)?;
+
+    // Cursor must be within [open, close] (inclusive) to be considered inside
+    if cursor_in_line > close_in_line {
+        return None;
+    }
+
+    Some((line_start + open_in_line + 1, line_start + close_in_line))
 }
 
-fn resolve_around_quote(_chars: &[char], _offset: usize, _quote: char) -> Option<(usize, usize)> {
-    None // Implemented in Task 5
+fn resolve_around_quote(chars: &[char], offset: usize, quote: char) -> Option<(usize, usize)> {
+    let inner = resolve_inner_quote(chars, offset, quote)?;
+    // Around includes the quotes themselves (one char before inner start, one after inner end)
+    Some((inner.0 - 1, inner.1 + 1))
 }
 
 fn resolve_inner_bracket(
@@ -252,5 +292,63 @@ mod tests {
         buf.set_cursor(0, 4); // on 'v' of "världen"
         let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Word));
         assert_eq!(range, Some((4, 11))); // "världen"
+    }
+
+    // --- Quotes ---
+
+    #[test]
+    fn inner_double_quote() {
+        let mut buf = TextBuffer::from_text("say \"hello world\" end");
+        buf.set_cursor(0, 7); // on 'l' inside quotes
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::DoubleQuote));
+        assert_eq!(range, Some((5, 16))); // "hello world"
+    }
+
+    #[test]
+    fn around_double_quote() {
+        let mut buf = TextBuffer::from_text("say \"hello world\" end");
+        buf.set_cursor(0, 7);
+        let range = resolve_text_object(&buf, &TextObject::Around(TextObjectKind::DoubleQuote));
+        assert_eq!(range, Some((4, 17))); // "\"hello world\""
+    }
+
+    #[test]
+    fn inner_single_quote() {
+        let mut buf = TextBuffer::from_text("it's 'fine' now");
+        buf.set_cursor(0, 7); // on 'i' inside quotes
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::SingleQuote));
+        assert_eq!(range, Some((6, 10))); // "fine"
+    }
+
+    #[test]
+    fn around_single_quote() {
+        let mut buf = TextBuffer::from_text("it's 'fine' now");
+        buf.set_cursor(0, 7);
+        let range = resolve_text_object(&buf, &TextObject::Around(TextObjectKind::SingleQuote));
+        assert_eq!(range, Some((5, 11))); // "'fine'"
+    }
+
+    #[test]
+    fn quote_cursor_on_opening_quote() {
+        let mut buf = TextBuffer::from_text("say \"hi\" end");
+        buf.set_cursor(0, 4); // on opening "
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::DoubleQuote));
+        assert_eq!(range, Some((5, 7))); // "hi"
+    }
+
+    #[test]
+    fn quote_no_match_returns_none() {
+        let mut buf = TextBuffer::from_text("no quotes here");
+        buf.set_cursor(0, 3);
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::DoubleQuote));
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn quote_empty_inside() {
+        let mut buf = TextBuffer::from_text("x = \"\"");
+        buf.set_cursor(0, 4); // on first "
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::DoubleQuote));
+        assert_eq!(range, Some((5, 5))); // empty range
     }
 }
