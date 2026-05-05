@@ -5,6 +5,8 @@ pub struct KeyParser {
     mode: Mode,
     pending: String,
     count: Option<usize>,
+    pending_register: Option<char>,
+    awaiting_register: bool,
 }
 
 // Note: Visual, Visual-Line, and Visual-Block modes are planned for Phase 2.
@@ -16,6 +18,8 @@ impl KeyParser {
             mode: Mode::Normal,
             pending: String::new(),
             count: None,
+            pending_register: None,
+            awaiting_register: false,
         }
     }
 
@@ -28,9 +32,9 @@ impl KeyParser {
         self.count.take().unwrap_or(1)
     }
 
-    /// Returns the pending register selection, consuming it. Stub — always returns None until Task 3.
+    /// Returns the pending register selection, consuming it.
     pub fn take_register(&mut self) -> Option<char> {
-        None
+        self.pending_register.take()
     }
 
     #[cfg(test)]
@@ -49,6 +53,8 @@ impl KeyParser {
     pub fn handle_escape(&mut self) -> VimAction {
         self.pending.clear();
         self.count = None;
+        self.pending_register = None;
+        self.awaiting_register = false;
         self.mode = Mode::Normal;
         VimAction::SwitchMode(Mode::Normal)
     }
@@ -68,6 +74,20 @@ impl KeyParser {
     }
 
     fn handle_normal(&mut self, ch: char) -> VimAction {
+        // Register prefix: " followed by a-z or +
+        if self.awaiting_register {
+            self.awaiting_register = false;
+            match ch {
+                'a'..='z' | '+' => {
+                    self.pending_register = Some(ch);
+                    return VimAction::Noop;
+                }
+                _ => {
+                    return VimAction::Noop;
+                }
+            }
+        }
+
         // Count prefix: digits 1-9 start a count, 0 after digits continues count.
         // Uses saturating arithmetic and caps at 99999 to prevent overflow.
         if ch.is_ascii_digit() && (ch != '0' || self.count.is_some()) {
@@ -170,6 +190,12 @@ impl KeyParser {
             ':' => {
                 self.mode = Mode::Command;
                 VimAction::SwitchMode(Mode::Command)
+            }
+
+            // Register prefix
+            '"' => {
+                self.awaiting_register = true;
+                VimAction::Noop
             }
 
             _ => VimAction::Noop,
@@ -376,5 +402,40 @@ mod tests {
         assert_eq!(parser.take_count(), 5);
         // Second take_count returns default 1
         assert_eq!(parser.take_count(), 1);
+    }
+
+    #[test]
+    fn register_prefix_sets_register() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('"'), VimAction::Noop);
+        assert_eq!(parser.handle_key('a'), VimAction::Noop);
+        assert_eq!(parser.take_register(), Some('a'));
+    }
+
+    #[test]
+    fn register_prefix_plus() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('"');
+        parser.handle_key('+');
+        assert_eq!(parser.take_register(), Some('+'));
+    }
+
+    #[test]
+    fn register_consumed_after_take() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('"');
+        parser.handle_key('a');
+        assert_eq!(parser.take_register(), Some('a'));
+        assert_eq!(parser.take_register(), None);
+    }
+
+    #[test]
+    fn register_prefix_then_operator() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('"');
+        parser.handle_key('a');
+        let action = parser.handle_key('p');
+        assert_eq!(action, VimAction::Paste);
+        assert_eq!(parser.take_register(), Some('a'));
     }
 }
