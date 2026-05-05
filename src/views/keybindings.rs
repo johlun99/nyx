@@ -147,7 +147,7 @@ impl KeybindingsView {
                 egui::Frame::default()
                     .fill(theme.status_bar_bg)
                     .stroke(egui::Stroke::new(1.0, theme.line_number))
-                    .rounding(8.0)
+                    .corner_radius(8.0)
                     .inner_margin(16.0)
                     .show(ui, |ui| {
                         ui.set_min_size(overlay_size);
@@ -203,7 +203,7 @@ impl KeybindingsView {
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.columns(2, |columns| {
-                                        let mid = (categories.len() + 1) / 2;
+                                        let mid = categories.len().div_ceil(2);
                                         for (col_idx, col_ui) in columns.iter_mut().enumerate() {
                                             let start = if col_idx == 0 { 0 } else { mid };
                                             let end = if col_idx == 0 { mid } else { categories.len() };
@@ -229,7 +229,7 @@ impl KeybindingsView {
                                                                 |ui| {
                                                                     egui::Frame::default()
                                                                         .fill(theme.selection)
-                                                                        .rounding(3.0)
+                                                                        .corner_radius(3.0)
                                                                         .inner_margin(egui::Margin::symmetric(6, 2))
                                                                         .show(ui, |ui| {
                                                                             ui.label(

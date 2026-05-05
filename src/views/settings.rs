@@ -1,4 +1,4 @@
-use crate::config::{LineNumberMode, NyxConfig};
+use crate::config::NyxConfig;
 use crate::renderer::Theme;
 use eframe::egui;
 
@@ -142,7 +142,7 @@ impl SettingsView {
                         );
                         ui.painter().rect_filled(row_rect, 4.0, row_bg);
 
-                        ui.allocate_ui_at_rect(row_rect, |ui| {
+                        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
                             ui.horizontal_centered(|ui| {
                                 ui.add_space(8.0);
 
@@ -240,7 +240,7 @@ impl SettingsView {
                                     .size(12.0),
                             )
                             .fill(bg_color)
-                            .rounding(12.0)
+                            .corner_radius(12.0)
                             .stroke(egui::Stroke::new(1.0, theme.line_number)),
                         );
 
@@ -359,7 +359,6 @@ impl SettingsView {
                             action = SettingsAction::ConfigChanged;
                         }
                     }
-                    return;
                 }
             }
         });
@@ -405,6 +404,7 @@ impl SettingsView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LineNumberMode;
 
     #[test]
     fn settings_field_from_index_roundtrip() {
