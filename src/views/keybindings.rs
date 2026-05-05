@@ -1,3 +1,6 @@
+use crate::renderer::Theme;
+use eframe::egui;
+
 pub struct KeybindingEntry {
     pub category: &'static str,
     pub action: &'static str,
@@ -87,6 +90,168 @@ impl KeybindingsView {
             }
         }
         cats
+    }
+
+    /// Handle keyboard input for the keybindings overlay.
+    /// Returns `true` if the overlay should close.
+    pub fn handle_input(&mut self, ctx: &egui::Context) -> bool {
+        let mut should_close = false;
+        ctx.input(|input| {
+            if input.key_pressed(egui::Key::Escape) {
+                if self.search.is_empty() {
+                    should_close = true;
+                } else {
+                    self.search.clear();
+                }
+                return;
+            }
+            if input.key_pressed(egui::Key::Backspace) {
+                self.search.pop();
+                return;
+            }
+            for event in &input.events {
+                if let egui::Event::Text(text) = event {
+                    if !input.modifiers.command && !input.modifiers.ctrl {
+                        self.search.push_str(text);
+                    }
+                }
+            }
+        });
+        should_close
+    }
+
+    /// Render the keybindings overlay on top of the (already rendered) editor.
+    pub fn render(&self, ctx: &egui::Context, theme: &Theme) {
+        // Semi-transparent dim layer over the editor
+        let screen = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("kb_dim"))
+            .fixed_pos(screen.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.painter().rect_filled(
+                    screen,
+                    0.0,
+                    egui::Color32::from_black_alpha(160),
+                );
+            });
+
+        // Overlay panel — centered with margin
+        let margin = 40.0;
+        let overlay_pos = egui::pos2(margin, margin);
+        let overlay_size = egui::vec2(screen.width() - margin * 2.0, screen.height() - margin * 2.0);
+
+        egui::Area::new(egui::Id::new("kb_overlay"))
+            .fixed_pos(overlay_pos)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::default()
+                    .fill(theme.status_bar_bg)
+                    .stroke(egui::Stroke::new(1.0, theme.line_number))
+                    .rounding(8.0)
+                    .inner_margin(16.0)
+                    .show(ui, |ui| {
+                        ui.set_min_size(overlay_size);
+
+                        // Header row
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("Keybindings")
+                                    .color(theme.foreground)
+                                    .size(18.0)
+                                    .strong(),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(
+                                    egui::RichText::new("ESC to close")
+                                        .color(theme.line_number)
+                                        .size(12.0),
+                                );
+                            });
+                        });
+
+                        ui.add_space(4.0);
+
+                        // Search indicator
+                        let search_display = if self.search.is_empty() {
+                            egui::RichText::new("Type to search...")
+                                .color(theme.line_number)
+                                .italics()
+                        } else {
+                            egui::RichText::new(format!("Search: {}", self.search))
+                                .color(theme.foreground)
+                        };
+                        ui.label(search_display);
+
+                        ui.separator();
+
+                        // Filtered entries
+                        let filtered = self.filtered_entries();
+
+                        if filtered.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(40.0);
+                                ui.label(
+                                    egui::RichText::new("No matches")
+                                        .color(theme.line_number)
+                                        .size(14.0),
+                                );
+                            });
+                        } else {
+                            let categories = Self::categories_for_entries(&filtered);
+
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.columns(2, |columns| {
+                                        let mid = (categories.len() + 1) / 2;
+                                        for (col_idx, col_ui) in columns.iter_mut().enumerate() {
+                                            let start = if col_idx == 0 { 0 } else { mid };
+                                            let end = if col_idx == 0 { mid } else { categories.len() };
+                                            for &cat in &categories[start..end] {
+                                                col_ui.add_space(4.0);
+                                                col_ui.label(
+                                                    egui::RichText::new(cat.to_uppercase())
+                                                        .color(theme.syntax.keyword)
+                                                        .size(11.0)
+                                                        .strong(),
+                                                );
+                                                col_ui.add_space(2.0);
+                                                for entry in &filtered {
+                                                    if entry.category == cat {
+                                                        col_ui.horizontal(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(entry.action)
+                                                                    .color(theme.foreground)
+                                                                    .size(13.0),
+                                                            );
+                                                            ui.with_layout(
+                                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                                |ui| {
+                                                                    egui::Frame::default()
+                                                                        .fill(theme.selection)
+                                                                        .rounding(3.0)
+                                                                        .inner_margin(egui::Margin::symmetric(6, 2))
+                                                                        .show(ui, |ui| {
+                                                                            ui.label(
+                                                                                egui::RichText::new(entry.key)
+                                                                                    .color(theme.foreground)
+                                                                                    .monospace()
+                                                                                    .size(12.0),
+                                                                            );
+                                                                        });
+                                                                },
+                                                            );
+                                                        });
+                                                    }
+                                                }
+                                                col_ui.add_space(8.0);
+                                            }
+                                        }
+                                    });
+                                });
+                        }
+                    });
+            });
     }
 }
 
