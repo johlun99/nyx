@@ -1,18 +1,9 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RegisterEntry {
     pub content: String,
     pub linewise: bool,
-}
-
-impl Default for RegisterEntry {
-    fn default() -> Self {
-        Self {
-            content: String::new(),
-            linewise: false,
-        }
-    }
 }
 
 pub struct RegisterFile {

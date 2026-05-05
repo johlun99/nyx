@@ -347,11 +347,7 @@ impl Editor {
                     return None; // No overlap
                 }
 
-                let col_start = if sel_start > line_start {
-                    sel_start - line_start
-                } else {
-                    0
-                };
+                let col_start = sel_start.saturating_sub(line_start);
                 let col_end = if sel_end < line_end {
                     sel_end - line_start
                 } else {
@@ -385,6 +381,7 @@ impl Editor {
     }
 
     /// Returns (start_line, end_line, start_col, end_col) for block selection.
+    #[allow(dead_code)]
     pub fn visual_block_bounds(&self) -> Option<(usize, usize, usize, usize)> {
         let anchor = self.visual_anchor?;
         if self.mode() != Mode::VisualBlock {
@@ -553,11 +550,7 @@ impl Editor {
             .enumerate()
             .filter(|(_, &(start, end))| end > line_start && start < line_end)
             .map(|(idx, &(start, end))| {
-                let col_start = if start > line_start {
-                    start - line_start
-                } else {
-                    0
-                };
+                let col_start = start.saturating_sub(line_start);
                 let col_end = if end < line_end {
                     end - line_start
                 } else {

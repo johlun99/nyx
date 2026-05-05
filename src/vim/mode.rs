@@ -20,6 +20,7 @@ impl Mode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_visual(&self) -> bool {
         matches!(self, Mode::Visual | Mode::VisualLine | Mode::VisualBlock)
     }

@@ -248,10 +248,10 @@ fn resolve_inner_bracket(
 
     // Find matching close bracket
     let mut depth = 1i32;
-    for i in (open_pos + 1)..chars.len() {
-        if chars[i] == open {
+    for (i, &ch) in chars.iter().enumerate().skip(open_pos + 1) {
+        if ch == open {
             depth += 1;
-        } else if chars[i] == close {
+        } else if ch == close {
             depth -= 1;
             if depth == 0 {
                 return Some((open_pos + 1, i));
