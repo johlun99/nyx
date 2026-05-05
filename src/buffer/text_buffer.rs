@@ -111,6 +111,7 @@ impl TextBuffer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn delete_char_at_cursor(&mut self) {
         let offset = self.cursor_offset();
         if offset >= self.rope.len_chars() {

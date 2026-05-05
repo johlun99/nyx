@@ -1,6 +1,7 @@
 // src/renderer/theme.rs
 use eframe::egui::Color32;
 
+#[allow(dead_code)]
 pub struct SyntaxColors {
     pub keyword: Color32,
     pub string: Color32,
@@ -10,6 +11,7 @@ pub struct SyntaxColors {
     pub number: Color32,
 }
 
+#[allow(dead_code)]
 pub struct Theme {
     pub name: String,
     pub background: Color32,
