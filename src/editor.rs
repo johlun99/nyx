@@ -5,6 +5,12 @@ use crate::vim::motion::execute_motion;
 use crate::vim::operator::OperatorEngine;
 use crate::vim::{InsertEntry, KeyParser, Mode, VimAction};
 
+#[derive(Debug, Clone, Copy)]
+pub struct VisualAnchor {
+    pub line: usize,
+    pub col: usize,
+}
+
 pub struct Editor {
     pub buffer: TextBuffer,
     pub key_parser: KeyParser,
@@ -13,6 +19,7 @@ pub struct Editor {
     pub should_quit: bool,
     pub status_message: Option<String>,
     pub command_parser: CommandParser,
+    pub visual_anchor: Option<VisualAnchor>,
 }
 
 impl Editor {
@@ -39,6 +46,7 @@ impl Editor {
             should_quit: false,
             status_message: None,
             command_parser: CommandParser::new(),
+            visual_anchor: None,
         }
     }
 
@@ -56,10 +64,13 @@ impl Editor {
         let register = self.key_parser.take_register();
         match action {
             VimAction::SwitchMode(Mode::Normal) => {
-                self.buffer.end_undo_group();
-                let col = self.buffer.cursor_col();
-                if col > 0 {
-                    self.buffer.set_cursor(self.buffer.cursor_line(), col - 1);
+                self.visual_anchor = None;
+                let was_insert = self.buffer.end_undo_group();
+                if was_insert {
+                    let col = self.buffer.cursor_col();
+                    if col > 0 {
+                        self.buffer.set_cursor(self.buffer.cursor_line(), col - 1);
+                    }
                 }
                 self.buffer.clamp_cursor_normal();
             }
@@ -102,11 +113,76 @@ impl Editor {
                     self.operator_engine.paste(&mut self.buffer, register);
                 }
             }
-            VimAction::EnterVisual(_) => {} // Handled in Task 10
+            VimAction::EnterVisual(ref _kind) => {
+                self.visual_anchor = Some(VisualAnchor {
+                    line: self.buffer.cursor_line(),
+                    col: self.buffer.cursor_col(),
+                });
+            }
             VimAction::VisualOperator(_) => {} // Handled in Task 10
-            VimAction::SwapVisualAnchor => {} // Handled in Task 10
+            VimAction::SwapVisualAnchor => {
+                if let Some(ref mut anchor) = self.visual_anchor {
+                    let old_anchor_line = anchor.line;
+                    let old_anchor_col = anchor.col;
+                    anchor.line = self.buffer.cursor_line();
+                    anchor.col = self.buffer.cursor_col();
+                    self.buffer.set_cursor(old_anchor_line, old_anchor_col);
+                }
+            }
             VimAction::Noop => unreachable!(),
         }
+    }
+
+    /// Returns the char range [start, end) of the visual selection.
+    pub fn visual_selection_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.visual_anchor?;
+        let anchor_offset = self.buffer.line_to_char(anchor.line) + anchor.col;
+        let cursor_offset = self.buffer.cursor_offset();
+
+        match self.mode() {
+            Mode::Visual => {
+                let start = anchor_offset.min(cursor_offset);
+                let end = anchor_offset.max(cursor_offset) + 1; // inclusive
+                Some((start, end.min(self.buffer.len_chars())))
+            }
+            Mode::VisualLine => {
+                let start_line = anchor.line.min(self.buffer.cursor_line());
+                let end_line = anchor.line.max(self.buffer.cursor_line());
+                let start = self.buffer.line_to_char(start_line);
+                let end = if end_line + 1 < self.buffer.line_count() {
+                    self.buffer.line_to_char(end_line + 1)
+                } else {
+                    self.buffer.len_chars()
+                };
+                Some((start, end))
+            }
+            Mode::VisualBlock => {
+                // For block mode, return bounding line range for highlighting
+                let start_line = anchor.line.min(self.buffer.cursor_line());
+                let end_line = anchor.line.max(self.buffer.cursor_line());
+                let start = self.buffer.line_to_char(start_line);
+                let end = if end_line + 1 < self.buffer.line_count() {
+                    self.buffer.line_to_char(end_line + 1)
+                } else {
+                    self.buffer.len_chars()
+                };
+                Some((start, end))
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns (start_line, end_line, start_col, end_col) for block selection.
+    pub fn visual_block_bounds(&self) -> Option<(usize, usize, usize, usize)> {
+        let anchor = self.visual_anchor?;
+        if self.mode() != Mode::VisualBlock {
+            return None;
+        }
+        let start_line = anchor.line.min(self.buffer.cursor_line());
+        let end_line = anchor.line.max(self.buffer.cursor_line());
+        let start_col = anchor.col.min(self.buffer.cursor_col());
+        let end_col = anchor.col.max(self.buffer.cursor_col());
+        Some((start_line, end_line, start_col, end_col))
     }
 
     fn handle_insert_entry(&mut self, entry: InsertEntry) {
