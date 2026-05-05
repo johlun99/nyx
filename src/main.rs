@@ -5,6 +5,7 @@ mod config;
 mod editor;
 mod file_io;
 mod renderer;
+mod syntax;
 mod vim;
 
 fn main() -> eframe::Result<()> {

@@ -1,23 +1,166 @@
 // src/config/schema.rs
-use serde::{Deserialize, Serialize};
+use serde::de::{self, MapAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 use std::path::Path;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineNumberMode {
+    Absolute,
+    Relative,
+    Off,
+}
+
+impl Serialize for LineNumberMode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let s = match self {
+            LineNumberMode::Absolute => "absolute",
+            LineNumberMode::Relative => "relative",
+            LineNumberMode::Off => "off",
+        };
+        serializer.serialize_str(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for LineNumberMode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "absolute" => Ok(LineNumberMode::Absolute),
+            "relative" => Ok(LineNumberMode::Relative),
+            "off" => Ok(LineNumberMode::Off),
+            other => Err(de::Error::unknown_variant(
+                other,
+                &["absolute", "relative", "off"],
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EditorConfig {
+    pub font_family: String,
+    pub font_size: f32,
+    pub line_numbers: LineNumberMode,
+    pub cursor_blink: bool,
+    pub word_wrap: bool,
+    pub tab_size: usize,
+}
+
+impl Serialize for EditorConfig {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("font_family", &self.font_family)?;
+        map.serialize_entry("font_size", &self.font_size)?;
+        map.serialize_entry("line_numbers", &self.line_numbers)?;
+        map.serialize_entry("cursor_blink", &self.cursor_blink)?;
+        map.serialize_entry("word_wrap", &self.word_wrap)?;
+        map.serialize_entry("tab_size", &self.tab_size)?;
+        map.end()
+    }
+}
+
+struct EditorConfigVisitor;
+
+impl<'de> Visitor<'de> for EditorConfigVisitor {
+    type Value = EditorConfig;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a map representing EditorConfig")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<EditorConfig, A::Error> {
+        let mut font_family: Option<String> = None;
+        let mut font_size: Option<f32> = None;
+        let mut line_numbers_value: Option<serde_json::Value> = None;
+        let mut relative_line_numbers: Option<bool> = None;
+        let mut cursor_blink: Option<bool> = None;
+        let mut word_wrap: Option<bool> = None;
+        let mut tab_size: Option<usize> = None;
+
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "font_family" => {
+                    font_family = Some(map.next_value()?);
+                }
+                "font_size" => {
+                    font_size = Some(map.next_value()?);
+                }
+                "line_numbers" => {
+                    line_numbers_value = Some(map.next_value()?);
+                }
+                "relative_line_numbers" => {
+                    relative_line_numbers = Some(map.next_value()?);
+                }
+                "cursor_blink" => {
+                    cursor_blink = Some(map.next_value()?);
+                }
+                "word_wrap" => {
+                    word_wrap = Some(map.next_value()?);
+                }
+                "tab_size" => {
+                    tab_size = Some(map.next_value()?);
+                }
+                _ => {
+                    map.next_value::<serde_json::Value>()?;
+                }
+            }
+        }
+
+        let line_numbers = match line_numbers_value {
+            Some(serde_json::Value::String(s)) => match s.as_str() {
+                "absolute" => LineNumberMode::Absolute,
+                "relative" => LineNumberMode::Relative,
+                "off" => LineNumberMode::Off,
+                other => {
+                    return Err(de::Error::unknown_variant(
+                        other,
+                        &["absolute", "relative", "off"],
+                    ))
+                }
+            },
+            Some(serde_json::Value::Bool(true)) => {
+                if relative_line_numbers.unwrap_or(false) {
+                    LineNumberMode::Relative
+                } else {
+                    LineNumberMode::Absolute
+                }
+            }
+            Some(serde_json::Value::Bool(false)) => LineNumberMode::Off,
+            None => LineNumberMode::Relative,
+            Some(other) => {
+                return Err(de::Error::invalid_type(
+                    de::Unexpected::Other(&format!("{other}")),
+                    &"string or bool",
+                ))
+            }
+        };
+
+        Ok(EditorConfig {
+            font_family: font_family.ok_or_else(|| de::Error::missing_field("font_family"))?,
+            font_size: font_size.ok_or_else(|| de::Error::missing_field("font_size"))?,
+            line_numbers,
+            cursor_blink: cursor_blink.ok_or_else(|| de::Error::missing_field("cursor_blink"))?,
+            word_wrap: word_wrap.ok_or_else(|| de::Error::missing_field("word_wrap"))?,
+            tab_size: tab_size.ok_or_else(|| de::Error::missing_field("tab_size"))?,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for EditorConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(EditorConfigVisitor)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NyxConfig {
     pub editor: EditorConfig,
     pub theme: String,
+    #[serde(default)]
+    pub languages: Vec<String>,
     pub modules: ModulesConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EditorConfig {
-    pub font_family: String,
-    pub font_size: f32,
-    pub line_numbers: bool,
-    pub relative_line_numbers: bool,
-    pub cursor_blink: bool,
-    pub word_wrap: bool,
-    pub tab_size: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,13 +183,13 @@ impl Default for NyxConfig {
             editor: EditorConfig {
                 font_family: "JetBrains Mono".into(),
                 font_size: 14.0,
-                line_numbers: true,
-                relative_line_numbers: true,
+                line_numbers: LineNumberMode::Relative,
                 cursor_blink: false,
                 word_wrap: false,
                 tab_size: 4,
             },
             theme: "default-dark".into(),
+            languages: vec![],
             modules: ModulesConfig {
                 filetree: ModuleEntry {
                     enabled: true,
@@ -66,6 +209,26 @@ impl Default for NyxConfig {
                 },
             },
         }
+    }
+}
+
+/// Formats a line number string based on the current mode.
+///
+/// - `Absolute`: returns the 1-based line number.
+/// - `Relative`: the cursor line shows its absolute number; all other lines
+///   show the distance (in lines) from the cursor.
+/// - `Off`: returns an empty string.
+pub fn format_line_number(mode: LineNumberMode, line_idx: usize, cursor_line: usize) -> String {
+    match mode {
+        LineNumberMode::Absolute => format!("{}", line_idx + 1),
+        LineNumberMode::Relative => {
+            if line_idx == cursor_line {
+                format!("{}", line_idx + 1)
+            } else {
+                format!("{}", line_idx.abs_diff(cursor_line))
+            }
+        }
+        LineNumberMode::Off => String::new(),
     }
 }
 
@@ -192,5 +355,199 @@ mod tests {
         // Original file should NOT be overwritten
         let content = std::fs::read_to_string(&config_path).unwrap();
         assert_eq!(content, "{ invalid json }");
+    }
+
+    // --- LineNumberMode tests ---
+
+    #[test]
+    fn line_number_mode_default_is_relative() {
+        let config = NyxConfig::default();
+        assert_eq!(config.editor.line_numbers, LineNumberMode::Relative);
+    }
+
+    #[test]
+    fn deserialize_new_format_relative() {
+        let json = r#"{
+            "font_family": "Mono",
+            "font_size": 14.0,
+            "line_numbers": "relative",
+            "cursor_blink": false,
+            "word_wrap": false,
+            "tab_size": 4
+        }"#;
+        let config: EditorConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.line_numbers, LineNumberMode::Relative);
+    }
+
+    #[test]
+    fn deserialize_new_format_absolute() {
+        let json = r#"{
+            "font_family": "Mono",
+            "font_size": 14.0,
+            "line_numbers": "absolute",
+            "cursor_blink": false,
+            "word_wrap": false,
+            "tab_size": 4
+        }"#;
+        let config: EditorConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.line_numbers, LineNumberMode::Absolute);
+    }
+
+    #[test]
+    fn deserialize_new_format_off() {
+        let json = r#"{
+            "font_family": "Mono",
+            "font_size": 14.0,
+            "line_numbers": "off",
+            "cursor_blink": false,
+            "word_wrap": false,
+            "tab_size": 4
+        }"#;
+        let config: EditorConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.line_numbers, LineNumberMode::Off);
+    }
+
+    #[test]
+    fn deserialize_old_format_with_relative() {
+        // Both bools true => Relative
+        let json = r#"{
+            "font_family": "Mono",
+            "font_size": 14.0,
+            "line_numbers": true,
+            "relative_line_numbers": true,
+            "cursor_blink": false,
+            "word_wrap": false,
+            "tab_size": 4
+        }"#;
+        let config: EditorConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.line_numbers, LineNumberMode::Relative);
+    }
+
+    #[test]
+    fn deserialize_old_format_absolute_only() {
+        // line_numbers true, relative_line_numbers false => Absolute
+        let json = r#"{
+            "font_family": "Mono",
+            "font_size": 14.0,
+            "line_numbers": true,
+            "relative_line_numbers": false,
+            "cursor_blink": false,
+            "word_wrap": false,
+            "tab_size": 4
+        }"#;
+        let config: EditorConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.line_numbers, LineNumberMode::Absolute);
+    }
+
+    #[test]
+    fn deserialize_old_format_off() {
+        // line_numbers false => Off (regardless of relative_line_numbers)
+        let json = r#"{
+            "font_family": "Mono",
+            "font_size": 14.0,
+            "line_numbers": false,
+            "relative_line_numbers": true,
+            "cursor_blink": false,
+            "word_wrap": false,
+            "tab_size": 4
+        }"#;
+        let config: EditorConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.line_numbers, LineNumberMode::Off);
+    }
+
+    #[test]
+    fn serialize_produces_new_format() {
+        let config = NyxConfig::default();
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        // New format: line_numbers is a string "relative"
+        assert!(json.contains("\"line_numbers\": \"relative\""));
+        // Old field must not appear
+        assert!(!json.contains("relative_line_numbers"));
+    }
+
+    // --- format_line_number tests ---
+
+    #[test]
+    fn format_line_number_absolute() {
+        assert_eq!(format_line_number(LineNumberMode::Absolute, 0, 5), "1");
+        assert_eq!(format_line_number(LineNumberMode::Absolute, 4, 5), "5");
+        assert_eq!(format_line_number(LineNumberMode::Absolute, 9, 5), "10");
+    }
+
+    #[test]
+    fn format_line_number_relative_cursor_line_shows_absolute() {
+        // cursor is at line index 4 (1-based: 5)
+        assert_eq!(format_line_number(LineNumberMode::Relative, 4, 4), "5");
+        // cursor at line 0
+        assert_eq!(format_line_number(LineNumberMode::Relative, 0, 0), "1");
+    }
+
+    #[test]
+    fn format_line_number_relative_other_lines_show_distance() {
+        // cursor at line index 4; line index 6 is 2 away
+        assert_eq!(format_line_number(LineNumberMode::Relative, 6, 4), "2");
+        // line index 1 is 3 away from cursor at 4
+        assert_eq!(format_line_number(LineNumberMode::Relative, 1, 4), "3");
+    }
+
+    #[test]
+    fn format_line_number_off_returns_empty() {
+        assert_eq!(format_line_number(LineNumberMode::Off, 0, 0), "");
+        assert_eq!(format_line_number(LineNumberMode::Off, 5, 3), "");
+    }
+
+    // --- languages field tests ---
+
+    #[test]
+    fn default_config_has_empty_languages() {
+        let config = NyxConfig::default();
+        assert!(config.languages.is_empty());
+    }
+
+    #[test]
+    fn deserialize_with_languages() {
+        let json = r#"{
+            "editor": {
+                "font_family": "JetBrains Mono",
+                "font_size": 14.0,
+                "line_numbers": "relative",
+                "cursor_blink": false,
+                "word_wrap": false,
+                "tab_size": 4
+            },
+            "theme": "default-dark",
+            "languages": ["rust", "json"],
+            "modules": {
+                "filetree": { "enabled": true, "panel": "left" },
+                "terminal": { "enabled": false, "panel": "bottom" },
+                "git": { "enabled": false, "panel": "right" },
+                "search": { "enabled": false, "panel": null }
+            }
+        }"#;
+        let config: NyxConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.languages, vec!["rust", "json"]);
+    }
+
+    #[test]
+    fn deserialize_without_languages_defaults_to_empty() {
+        let json = r#"{
+            "editor": {
+                "font_family": "JetBrains Mono",
+                "font_size": 14.0,
+                "line_numbers": "relative",
+                "cursor_blink": false,
+                "word_wrap": false,
+                "tab_size": 4
+            },
+            "theme": "default-dark",
+            "modules": {
+                "filetree": { "enabled": true, "panel": "left" },
+                "terminal": { "enabled": false, "panel": "bottom" },
+                "git": { "enabled": false, "panel": "right" },
+                "search": { "enabled": false, "panel": null }
+            }
+        }"#;
+        let config: NyxConfig = serde_json::from_str(json).unwrap();
+        assert!(config.languages.is_empty());
     }
 }

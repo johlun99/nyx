@@ -1,5 +1,8 @@
 // src/editor.rs
 use crate::buffer::TextBuffer;
+use crate::syntax::indent::compute_indent;
+use crate::syntax::languages::language_for_extension;
+use crate::syntax::SyntaxState;
 use crate::vim::action::SearchDirection;
 use crate::vim::command::{CommandParser, CommandResult};
 use crate::vim::motion::execute_motion;
@@ -34,10 +37,12 @@ pub struct Editor {
     pub search_input: Option<String>,
     recording_action: Option<LastAction>,
     replaying: bool,
+    pub syntax_state: Option<SyntaxState>,
+    pub tab_size: usize,
 }
 
 impl Editor {
-    pub fn new(file_path: Option<String>) -> Self {
+    pub fn new(file_path: Option<String>, configured_languages: &[String]) -> Self {
         let buffer = if let Some(ref path) = file_path {
             match crate::file_io::read_file(std::path::Path::new(path)) {
                 Ok(content) => TextBuffer::from_text(&content),
@@ -52,13 +57,41 @@ impl Editor {
             )
         };
 
+        let mut status_message = None;
+        let syntax_state = if let Some(ref path) = file_path {
+            let ext = std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if let Some(lang_name) = language_for_extension(ext) {
+                if configured_languages.iter().any(|l| l == lang_name) {
+                    match SyntaxState::new(lang_name, ext) {
+                        Some(mut state) => {
+                            state.parse(&buffer.text());
+                            Some(state)
+                        }
+                        None => None,
+                    }
+                } else {
+                    status_message = Some(format!(
+                        "No syntax for .{ext} \u{2014} add \"{lang_name}\" to languages in config"
+                    ));
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         Self {
             buffer,
             key_parser: KeyParser::new(),
             operator_engine: OperatorEngine::new(),
             file_path,
             should_quit: false,
-            status_message: None,
+            status_message,
             command_parser: CommandParser::new(),
             visual_anchor: None,
             last_action: None,
@@ -66,11 +99,17 @@ impl Editor {
             search_input: None,
             recording_action: None,
             replaying: false,
+            syntax_state,
+            tab_size: 4,
         }
     }
 
     pub fn mode(&self) -> Mode {
         self.key_parser.mode()
+    }
+
+    pub fn set_tab_size(&mut self, size: usize) {
+        self.tab_size = size;
     }
 
     pub fn apply_action(&mut self, action: VimAction) {
@@ -88,6 +127,9 @@ impl Editor {
             | VimAction::Undo
             | VimAction::Redo => {
                 self.search_state.matches.clear();
+                if let Some(ref mut ss) = self.syntax_state {
+                    ss.mark_dirty();
+                }
             }
             _ => {}
         }
@@ -148,7 +190,25 @@ impl Editor {
                 }
             }
             VimAction::InsertChar(ch) => {
-                self.buffer.insert_char(ch);
+                if ch == '\n' {
+                    let current_line = self.buffer.cursor_line();
+                    self.buffer.insert_char('\n');
+                    let indent = compute_indent(
+                        &self.buffer,
+                        self.syntax_state.as_ref(),
+                        current_line,
+                        self.tab_size,
+                    );
+                    if indent > 0 {
+                        let indent_str: String = " ".repeat(indent);
+                        let offset = self.buffer.cursor_offset();
+                        self.buffer.insert_text_at(offset, &indent_str);
+                        self.buffer
+                            .set_cursor_with_mode(self.buffer.cursor_line(), indent, true);
+                    }
+                } else {
+                    self.buffer.insert_char(ch);
+                }
             }
             VimAction::DeleteCharBefore => {
                 self.buffer.delete_char_before_cursor();
@@ -422,19 +482,33 @@ impl Editor {
             }
             InsertEntry::NewLineBelow => {
                 let line = self.buffer.cursor_line();
-                let next_line_offset = if line + 1 < self.buffer.line_count() {
-                    self.buffer.line_to_char(line + 1)
-                } else {
-                    self.buffer.len_chars()
-                };
-                self.buffer.insert_text_at(next_line_offset, "\n");
-                self.buffer.set_cursor(line + 1, 0);
+                let indent = compute_indent(
+                    &self.buffer,
+                    self.syntax_state.as_ref(),
+                    line,
+                    self.tab_size,
+                );
+                // Insert after the content of the current line (before its trailing \n if any)
+                let insert_offset =
+                    self.buffer.line_to_char(line) + self.buffer.line_content_len(line);
+                let indent_str: String = " ".repeat(indent);
+                self.buffer
+                    .insert_text_at(insert_offset, &format!("\n{}", indent_str));
+                self.buffer.set_cursor_with_mode(line + 1, indent, true);
             }
             InsertEntry::NewLineAbove => {
                 let line = self.buffer.cursor_line();
+                let indent = compute_indent(
+                    &self.buffer,
+                    self.syntax_state.as_ref(),
+                    line,
+                    self.tab_size,
+                );
                 let line_start = self.buffer.line_to_char(line);
-                self.buffer.insert_text_at(line_start, "\n");
-                self.buffer.set_cursor(line, 0);
+                let indent_str: String = " ".repeat(indent);
+                self.buffer
+                    .insert_text_at(line_start, &format!("{}\n", indent_str));
+                self.buffer.set_cursor_with_mode(line, indent, true);
             }
         }
     }
@@ -562,6 +636,28 @@ impl Editor {
             .collect()
     }
 
+    /// Re-parse syntax tree if dirty. Call before rendering.
+    pub fn ensure_syntax_parsed(&mut self) {
+        if let Some(ref mut ss) = self.syntax_state {
+            ss.ensure_parsed(&self.buffer.text());
+        }
+    }
+
+    /// Get syntax highlight spans for a line.
+    /// Returns Vec of (col_start, col_end, color) in char offsets.
+    pub fn syntax_highlights_for_line(
+        &self,
+        line_idx: usize,
+        theme: &crate::renderer::theme::Theme,
+    ) -> Vec<(usize, usize, eframe::egui::Color32)> {
+        match self.syntax_state {
+            Some(ref ss) => {
+                crate::syntax::highlighter::highlights_for_line(ss, &self.buffer, line_idx, theme)
+            }
+            None => Vec::new(),
+        }
+    }
+
     fn save_file(&mut self) {
         if let Some(ref path) = self.file_path {
             match crate::file_io::write_file(std::path::Path::new(path), &self.buffer.text()) {
@@ -587,7 +683,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_operator() {
-        let mut editor = Editor::new(None);
+        let mut editor = Editor::new(None, &[]);
         editor.buffer = TextBuffer::from_text("hello\nworld\nfoo");
         editor.buffer.set_cursor(0, 0);
 
@@ -602,7 +698,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_insert_session() {
-        let mut editor = Editor::new(None);
+        let mut editor = Editor::new(None, &[]);
         editor.buffer = TextBuffer::from_text("hello");
         editor.buffer.set_cursor(0, 4); // on 'o'
 
@@ -620,7 +716,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_with_count_override() {
-        let mut editor = Editor::new(None);
+        let mut editor = Editor::new(None, &[]);
         editor.buffer = TextBuffer::from_text("aaa\nbbb\nccc\nddd");
         editor.buffer.set_cursor(0, 0);
 
@@ -632,5 +728,130 @@ mod tests {
         editor.key_parser.handle_key('2');
         editor.apply_action(VimAction::DotRepeat);
         assert_eq!(editor.buffer.text(), "ddd");
+    }
+
+    #[test]
+    fn editor_creates_syntax_state_for_configured_language() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        std::fs::write(tmp.path(), "fn main() {}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        assert!(editor.syntax_state.is_some());
+    }
+
+    #[test]
+    fn editor_no_syntax_state_for_unconfigured_language() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        std::fs::write(tmp.path(), "fn main() {}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &[]);
+        assert!(editor.syntax_state.is_none());
+    }
+
+    #[test]
+    fn editor_no_syntax_state_for_unknown_extension() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".xyz").unwrap();
+        std::fs::write(tmp.path(), "hello").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        assert!(editor.syntax_state.is_none());
+    }
+
+    #[test]
+    fn new_line_below_copies_indent() {
+        let mut editor = Editor::new(None, &[]);
+        editor.buffer = TextBuffer::from_text("    hello\nworld");
+        editor.buffer.set_cursor(0, 4);
+
+        editor.set_tab_size(4);
+        editor.apply_action(VimAction::EnterInsert(InsertEntry::NewLineBelow));
+
+        // New line should be inserted after line 0 with 4 spaces indent
+        assert_eq!(editor.buffer.cursor_line(), 1);
+        let line = editor.buffer.line_slice(1).to_string();
+        assert!(
+            line.starts_with("    "),
+            "Expected 4 spaces indent, got: {:?}",
+            line
+        );
+        assert_eq!(editor.buffer.cursor_col(), 4);
+    }
+
+    #[test]
+    fn new_line_above_copies_indent() {
+        let mut editor = Editor::new(None, &[]);
+        editor.buffer = TextBuffer::from_text("    hello\nworld");
+        editor.buffer.set_cursor(0, 4);
+
+        editor.set_tab_size(4);
+        editor.apply_action(VimAction::EnterInsert(InsertEntry::NewLineAbove));
+
+        // New line should be inserted above line 0 with 4 spaces indent
+        assert_eq!(editor.buffer.cursor_line(), 0);
+        let line = editor.buffer.line_slice(0).to_string();
+        assert!(
+            line.starts_with("    "),
+            "Expected 4 spaces indent, got: {:?}",
+            line
+        );
+        assert_eq!(editor.buffer.cursor_col(), 4);
+    }
+
+    #[test]
+    fn enter_in_insert_mode_copies_indent() {
+        let mut editor = Editor::new(None, &[]);
+        editor.buffer = TextBuffer::from_text("    hello");
+        editor.buffer.set_cursor_with_mode(0, 9, true); // end of "    hello"
+
+        editor.set_tab_size(4);
+        editor.buffer.begin_undo_group();
+        editor.apply_action(VimAction::InsertChar('\n'));
+
+        assert_eq!(editor.buffer.cursor_line(), 1);
+        assert_eq!(editor.buffer.cursor_col(), 4); // indented to match line above
+    }
+
+    #[test]
+    fn warning_for_unconfigured_language() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".py").unwrap();
+        std::fs::write(tmp.path(), "print('hello')").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        assert!(editor.syntax_state.is_none());
+        assert!(
+            editor.status_message.as_ref().unwrap().contains("python"),
+            "Expected warning mentioning 'python', got: {:?}",
+            editor.status_message
+        );
+    }
+
+    #[test]
+    fn no_warning_for_unknown_extension() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".xyz").unwrap();
+        std::fs::write(tmp.path(), "data").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &[]);
+        assert!(editor.syntax_state.is_none());
+        assert!(
+            editor.status_message.is_none(),
+            "Expected no warning for unknown extension, got: {:?}",
+            editor.status_message
+        );
+    }
+
+    #[test]
+    fn no_warning_for_configured_language() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        std::fs::write(tmp.path(), "fn main() {}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        assert!(editor.syntax_state.is_some());
+        // Status message should be None (or a success message, not a warning)
+        let msg = editor.status_message.as_deref().unwrap_or("");
+        assert!(
+            !msg.contains("add"),
+            "Expected no 'add to config' warning, got: {:?}",
+            msg
+        );
     }
 }

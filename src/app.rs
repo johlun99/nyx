@@ -14,8 +14,10 @@ pub struct NyxApp {
 
 impl NyxApp {
     pub fn new(file_path: Option<String>, config: NyxConfig) -> Self {
+        let mut editor = Editor::new(file_path, &config.languages);
+        editor.set_tab_size(config.editor.tab_size);
         Self {
-            editor: Editor::new(file_path),
+            editor,
             editor_view: EditorView::new(),
             theme: Theme::default_dark(),
             config,
@@ -151,6 +153,8 @@ impl eframe::App for NyxApp {
 
         self.handle_input(ctx);
 
+        self.editor.ensure_syntax_parsed();
+
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
@@ -159,6 +163,7 @@ impl eframe::App for NyxApp {
                     &self.editor,
                     &self.theme,
                     self.config.editor.font_size,
+                    self.config.editor.line_numbers,
                 );
             });
     }

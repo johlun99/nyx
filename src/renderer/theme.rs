@@ -9,6 +9,8 @@ pub struct SyntaxColors {
     pub function: Color32,
     pub r#type: Color32,
     pub number: Color32,
+    pub operator: Color32,
+    pub punctuation: Color32,
 }
 
 #[allow(dead_code)]
@@ -44,12 +46,14 @@ impl Theme {
             status_bar_bg: Color32::from_rgb(0x31, 0x32, 0x44),
             status_bar_fg: Color32::from_rgb(0xcd, 0xd6, 0xf4),
             syntax: SyntaxColors {
-                keyword: Color32::from_rgb(0xcb, 0xa6, 0xf7),
-                string: Color32::from_rgb(0xa6, 0xe3, 0xa1),
-                comment: Color32::from_rgb(0x6c, 0x70, 0x86),
-                function: Color32::from_rgb(0x89, 0xb4, 0xfa),
-                r#type: Color32::from_rgb(0xf9, 0xe2, 0xaf),
-                number: Color32::from_rgb(0xfa, 0xb3, 0x87),
+                keyword: Color32::from_rgb(0xcb, 0xa6, 0xf7),  // mauve
+                string: Color32::from_rgb(0xa6, 0xe3, 0xa1),   // green
+                comment: Color32::from_rgb(0x6c, 0x70, 0x86),  // overlay0
+                function: Color32::from_rgb(0x89, 0xb4, 0xfa), // blue
+                r#type: Color32::from_rgb(0xf9, 0xe2, 0xaf),   // yellow
+                number: Color32::from_rgb(0xfa, 0xb3, 0x87),   // peach
+                operator: Color32::from_rgb(0x89, 0xdc, 0xeb), // sky
+                punctuation: Color32::from_rgb(0x93, 0x99, 0xb2), // overlay2
             },
             search_match: Color32::from_rgba_premultiplied(0x30, 0x2c, 0x22, 0x50),
             search_current: Color32::from_rgba_premultiplied(0x50, 0x38, 0x28, 0x70),
