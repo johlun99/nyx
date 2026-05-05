@@ -126,16 +126,11 @@ impl eframe::App for NyxApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
-                let command_input = self.editor.command_input();
                 self.editor_view.render(
                     ui,
-                    &self.editor.buffer,
+                    &self.editor,
                     &self.theme,
-                    self.editor.mode(),
                     self.config.editor.font_size,
-                    self.editor.file_path.as_deref(),
-                    command_input,
-                    self.editor.status_message.as_deref(),
                 );
             });
     }

@@ -1,5 +1,5 @@
 // src/renderer/editor_view.rs
-use crate::buffer::TextBuffer;
+use crate::editor::Editor;
 use crate::renderer::status_bar::StatusBar;
 use crate::renderer::theme::Theme;
 use crate::vim::mode::Mode;
@@ -14,18 +14,19 @@ impl EditorView {
         Self { scroll_offset: 0 }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
-        buffer: &TextBuffer,
+        editor: &Editor,
         theme: &Theme,
-        mode: Mode,
         font_size: f32,
-        file_path: Option<&str>,
-        command_input: Option<&str>,
-        status_message: Option<&str>,
     ) {
+        let buffer = &editor.buffer;
+        let mode = editor.mode();
+        let file_path = editor.file_path.as_deref();
+        let command_input = editor.command_input();
+        let status_message = editor.status_message.as_deref();
+
         let font_id = egui::FontId::monospace(font_size);
         let line_height = ui.fonts(|f| f.row_height(&font_id));
         let char_width = ui.fonts(|f| {
@@ -89,6 +90,31 @@ impl EditorView {
                 font_id.clone(),
                 theme.foreground,
             );
+
+            // Selection highlight (visual modes)
+            if let Some((sel_start_col, sel_end_col)) = editor.visual_highlights_for_line(i) {
+                let sel_x_start: f32 = if sel_start_col == 0 {
+                    0.0
+                } else {
+                    let prefix: String = display.chars().take(sel_start_col).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let sel_x_end: f32 = {
+                    let prefix: String = display.chars().take(sel_end_col).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let sel_rect = Rect::from_min_size(
+                    egui::pos2(text_x + sel_x_start, y),
+                    Vec2::new(sel_x_end - sel_x_start, line_height),
+                );
+                painter.rect_filled(sel_rect, 0.0, theme.selection);
+            }
 
             // Cursor (only on cursor line)
             if i == buffer.cursor_line() {

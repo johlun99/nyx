@@ -198,6 +198,61 @@ impl Editor {
         }
     }
 
+    /// Get visual highlight ranges for the renderer.
+    /// Returns (start_col, end_col) for highlighting on a given line.
+    pub fn visual_highlights_for_line(&self, line_idx: usize) -> Option<(usize, usize)> {
+        let anchor = self.visual_anchor?;
+        match self.mode() {
+            Mode::Visual => {
+                let anchor_offset = self.buffer.line_to_char(anchor.line) + anchor.col;
+                let cursor_offset = self.buffer.cursor_offset();
+                let sel_start = anchor_offset.min(cursor_offset);
+                let sel_end = anchor_offset.max(cursor_offset) + 1;
+
+                let line_start = self.buffer.line_to_char(line_idx);
+                let line_end = line_start + self.buffer.line_len_chars(line_idx);
+
+                if sel_end <= line_start || sel_start >= line_end {
+                    return None; // No overlap
+                }
+
+                let col_start = if sel_start > line_start {
+                    sel_start - line_start
+                } else {
+                    0
+                };
+                let col_end = if sel_end < line_end {
+                    sel_end - line_start
+                } else {
+                    self.buffer.line_content_len(line_idx)
+                };
+
+                Some((col_start, col_end))
+            }
+            Mode::VisualLine => {
+                let start_line = anchor.line.min(self.buffer.cursor_line());
+                let end_line = anchor.line.max(self.buffer.cursor_line());
+                if line_idx >= start_line && line_idx <= end_line {
+                    Some((0, self.buffer.line_content_len(line_idx)))
+                } else {
+                    None
+                }
+            }
+            Mode::VisualBlock => {
+                let start_line = anchor.line.min(self.buffer.cursor_line());
+                let end_line = anchor.line.max(self.buffer.cursor_line());
+                if line_idx >= start_line && line_idx <= end_line {
+                    let start_col = anchor.col.min(self.buffer.cursor_col());
+                    let end_col = anchor.col.max(self.buffer.cursor_col()) + 1;
+                    Some((start_col, end_col))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Returns (start_line, end_line, start_col, end_col) for block selection.
     pub fn visual_block_bounds(&self) -> Option<(usize, usize, usize, usize)> {
         let anchor = self.visual_anchor?;
