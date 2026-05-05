@@ -158,6 +158,8 @@ impl<'de> Deserialize<'de> for EditorConfig {
 pub struct NyxConfig {
     pub editor: EditorConfig,
     pub theme: String,
+    #[serde(default)]
+    pub languages: Vec<String>,
     pub modules: ModulesConfig,
 }
 
@@ -187,6 +189,7 @@ impl Default for NyxConfig {
                 tab_size: 4,
             },
             theme: "default-dark".into(),
+            languages: vec![],
             modules: ModulesConfig {
                 filetree: ModuleEntry {
                     enabled: true,
@@ -491,5 +494,60 @@ mod tests {
     fn format_line_number_off_returns_empty() {
         assert_eq!(format_line_number(LineNumberMode::Off, 0, 0), "");
         assert_eq!(format_line_number(LineNumberMode::Off, 5, 3), "");
+    }
+
+    // --- languages field tests ---
+
+    #[test]
+    fn default_config_has_empty_languages() {
+        let config = NyxConfig::default();
+        assert!(config.languages.is_empty());
+    }
+
+    #[test]
+    fn deserialize_with_languages() {
+        let json = r#"{
+            "editor": {
+                "font_family": "JetBrains Mono",
+                "font_size": 14.0,
+                "line_numbers": "relative",
+                "cursor_blink": false,
+                "word_wrap": false,
+                "tab_size": 4
+            },
+            "theme": "default-dark",
+            "languages": ["rust", "json"],
+            "modules": {
+                "filetree": { "enabled": true, "panel": "left" },
+                "terminal": { "enabled": false, "panel": "bottom" },
+                "git": { "enabled": false, "panel": "right" },
+                "search": { "enabled": false, "panel": null }
+            }
+        }"#;
+        let config: NyxConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.languages, vec!["rust", "json"]);
+    }
+
+    #[test]
+    fn deserialize_without_languages_defaults_to_empty() {
+        let json = r#"{
+            "editor": {
+                "font_family": "JetBrains Mono",
+                "font_size": 14.0,
+                "line_numbers": "relative",
+                "cursor_blink": false,
+                "word_wrap": false,
+                "tab_size": 4
+            },
+            "theme": "default-dark",
+            "modules": {
+                "filetree": { "enabled": true, "panel": "left" },
+                "terminal": { "enabled": false, "panel": "bottom" },
+                "git": { "enabled": false, "panel": "right" },
+                "search": { "enabled": false, "panel": null }
+            }
+        }"#;
+        let config: NyxConfig = serde_json::from_str(json).unwrap();
+        assert!(config.languages.is_empty());
     }
 }
