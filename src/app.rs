@@ -1,5 +1,6 @@
 // src/app.rs
 use eframe::egui;
+use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::renderer::{EditorView, Theme};
 use crate::vim::Mode;
@@ -8,14 +9,16 @@ pub struct NyxApp {
     editor: Editor,
     editor_view: EditorView,
     theme: Theme,
+    config: NyxConfig,
 }
 
 impl NyxApp {
-    pub fn new(file_path: Option<String>) -> Self {
+    pub fn new(file_path: Option<String>, config: NyxConfig) -> Self {
         Self {
             editor: Editor::new(file_path),
             editor_view: EditorView::new(),
             theme: Theme::default_dark(),
+            config,
         }
     }
 
@@ -118,7 +121,7 @@ impl eframe::App for NyxApp {
                     &self.editor.buffer,
                     &self.theme,
                     self.editor.mode(),
-                    14.0,
+                    self.config.editor.font_size,
                     self.editor.file_path.as_deref(),
                     command_input,
                     self.editor.status_message.as_deref(),
