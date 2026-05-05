@@ -6,6 +6,7 @@ mod editor;
 mod file_io;
 mod renderer;
 mod syntax;
+mod views;
 mod vim;
 
 fn main() -> eframe::Result<()> {
