@@ -38,7 +38,6 @@ impl KeyParser {
         self.pending_register.take()
     }
 
-    #[cfg(test)]
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
     }
@@ -48,7 +47,7 @@ impl KeyParser {
             Mode::Normal => self.handle_normal(ch),
             Mode::Insert => self.handle_insert(ch),
             Mode::Command => VimAction::Noop, // command input handled separately
-            Mode::Visual | Mode::VisualLine | Mode::VisualBlock => self.handle_normal(ch), // temporary: delegate to normal mode handling
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock => self.handle_visual(ch),
         }
     }
 
@@ -227,6 +226,16 @@ impl KeyParser {
                 VimAction::EnterInsert(InsertEntry::NewLineAbove)
             }
 
+            // Visual mode entry
+            'v' => {
+                self.mode = Mode::Visual;
+                VimAction::EnterVisual(VisualKind::Char)
+            }
+            'V' => {
+                self.mode = Mode::VisualLine;
+                VimAction::EnterVisual(VisualKind::Line)
+            }
+
             // Command mode
             ':' => {
                 self.mode = Mode::Command;
@@ -237,6 +246,80 @@ impl KeyParser {
             '"' => {
                 self.awaiting_register = true;
                 VimAction::Noop
+            }
+
+            _ => VimAction::Noop,
+        }
+    }
+
+    fn handle_visual(&mut self, ch: char) -> VimAction {
+        // Handle pending sequences (e.g. gg)
+        if !self.pending.is_empty() {
+            let combined = format!("{}{}", self.pending, ch);
+            self.pending.clear();
+            return match combined.as_str() {
+                "gg" => VimAction::Motion(MotionKind::FileTop),
+                _ => VimAction::Noop,
+            };
+        }
+
+        match ch {
+            // Motions work in visual mode (move cursor, selection follows)
+            'h' => VimAction::Motion(MotionKind::Left),
+            'j' => VimAction::Motion(MotionKind::Down),
+            'k' => VimAction::Motion(MotionKind::Up),
+            'l' => VimAction::Motion(MotionKind::Right),
+            '0' => VimAction::Motion(MotionKind::LineStart),
+            '^' => VimAction::Motion(MotionKind::FirstNonBlank),
+            '$' => VimAction::Motion(MotionKind::LineEnd),
+            'w' => VimAction::Motion(MotionKind::WordForward),
+            'b' => VimAction::Motion(MotionKind::WordBackward),
+            'e' => VimAction::Motion(MotionKind::WordEnd),
+            'G' => VimAction::Motion(MotionKind::FileBottom),
+            'g' => {
+                self.pending.push(ch);
+                VimAction::Noop
+            }
+
+            // Operators on selection
+            'd' => {
+                self.mode = Mode::Normal;
+                VimAction::VisualOperator(VisualOperatorAction::Delete)
+            }
+            'c' => {
+                self.mode = Mode::Insert;
+                VimAction::VisualOperator(VisualOperatorAction::Change)
+            }
+            'y' => {
+                self.mode = Mode::Normal;
+                VimAction::VisualOperator(VisualOperatorAction::Yank)
+            }
+            'x' => {
+                self.mode = Mode::Normal;
+                VimAction::VisualOperator(VisualOperatorAction::Delete)
+            }
+
+            // Swap anchor/cursor
+            'o' => VimAction::SwapVisualAnchor,
+
+            // Switch between visual sub-modes
+            'v' => {
+                if self.mode == Mode::Visual {
+                    self.mode = Mode::Normal;
+                    VimAction::SwitchMode(Mode::Normal)
+                } else {
+                    self.mode = Mode::Visual;
+                    VimAction::SwitchMode(Mode::Visual)
+                }
+            }
+            'V' => {
+                if self.mode == Mode::VisualLine {
+                    self.mode = Mode::Normal;
+                    VimAction::SwitchMode(Mode::Normal)
+                } else {
+                    self.mode = Mode::VisualLine;
+                    VimAction::SwitchMode(Mode::VisualLine)
+                }
             }
 
             _ => VimAction::Noop,
@@ -544,5 +627,73 @@ mod tests {
         assert_eq!(parser.handle_key('z'), VimAction::Noop); // invalid object
         // Parser should be clean
         assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
+    }
+
+    #[test]
+    fn v_enters_visual_mode() {
+        let mut parser = KeyParser::new();
+        let action = parser.handle_key('v');
+        assert_eq!(action, VimAction::EnterVisual(VisualKind::Char));
+        assert_eq!(parser.mode(), Mode::Visual);
+    }
+
+    #[test]
+    fn visual_v_enters_visual_line() {
+        let mut parser = KeyParser::new();
+        let action = parser.handle_key('V');
+        assert_eq!(action, VimAction::EnterVisual(VisualKind::Line));
+        assert_eq!(parser.mode(), Mode::VisualLine);
+    }
+
+    #[test]
+    fn visual_mode_d_deletes_selection() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_key('d');
+        assert_eq!(action, VimAction::VisualOperator(VisualOperatorAction::Delete));
+        assert_eq!(parser.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn visual_mode_y_yanks_selection() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_key('y');
+        assert_eq!(action, VimAction::VisualOperator(VisualOperatorAction::Yank));
+        assert_eq!(parser.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn visual_mode_c_changes_selection() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_key('c');
+        assert_eq!(action, VimAction::VisualOperator(VisualOperatorAction::Change));
+        assert_eq!(parser.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn visual_mode_o_swaps_anchor() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_key('o');
+        assert_eq!(action, VimAction::SwapVisualAnchor);
+    }
+
+    #[test]
+    fn visual_mode_escape_returns_normal() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_escape();
+        assert_eq!(action, VimAction::SwitchMode(Mode::Normal));
+        assert_eq!(parser.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn visual_mode_motions_work() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
+        assert_eq!(parser.handle_key('w'), VimAction::Motion(MotionKind::WordForward));
     }
 }

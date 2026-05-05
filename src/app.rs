@@ -2,7 +2,7 @@
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::renderer::{EditorView, Theme};
-use crate::vim::Mode;
+use crate::vim::{Mode, VimAction, VisualKind};
 use eframe::egui;
 
 pub struct NyxApp {
@@ -67,6 +67,17 @@ impl NyxApp {
                 && input.key_pressed(egui::Key::R)
             {
                 let action = self.editor.key_parser.handle_ctrl_r();
+                self.editor.apply_action(action);
+                return;
+            }
+
+            // Ctrl+V for visual block mode — only in Normal mode
+            if self.editor.mode() == Mode::Normal
+                && input.modifiers.ctrl
+                && input.key_pressed(egui::Key::V)
+            {
+                self.editor.key_parser.set_mode(Mode::VisualBlock);
+                let action = VimAction::EnterVisual(VisualKind::Block);
                 self.editor.apply_action(action);
                 return;
             }

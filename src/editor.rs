@@ -3,7 +3,7 @@ use crate::buffer::TextBuffer;
 use crate::vim::command::{CommandParser, CommandResult};
 use crate::vim::motion::execute_motion;
 use crate::vim::operator::OperatorEngine;
-use crate::vim::{InsertEntry, KeyParser, Mode, VimAction};
+use crate::vim::{InsertEntry, KeyParser, Mode, VimAction, VisualOperatorAction};
 
 #[derive(Debug, Clone, Copy)]
 pub struct VisualAnchor {
@@ -119,7 +119,33 @@ impl Editor {
                     col: self.buffer.cursor_col(),
                 });
             }
-            VimAction::VisualOperator(_) => {} // Handled in Task 10
+            VimAction::VisualOperator(ref vis_op) => {
+                if let Some((start, end)) = self.visual_selection_range() {
+                    let content = self.buffer.slice(start, end);
+                    let was_visual_line = content.ends_with('\n');
+
+                    match vis_op {
+                        VisualOperatorAction::Delete => {
+                            self.operator_engine.registers.set(register, content, was_visual_line);
+                            self.buffer.delete_range(start, end);
+                            self.buffer.update_cursor_from_offset(start);
+                            self.buffer.clamp_cursor_normal();
+                        }
+                        VisualOperatorAction::Change => {
+                            self.operator_engine.registers.set(register, content, was_visual_line);
+                            self.buffer.delete_range(start, end);
+                            self.buffer.update_cursor_from_offset(start);
+                            self.buffer.begin_undo_group();
+                        }
+                        VisualOperatorAction::Yank => {
+                            self.operator_engine.registers.set(register, content, was_visual_line);
+                            self.buffer.update_cursor_from_offset(start);
+                            self.buffer.clamp_cursor_normal();
+                        }
+                    }
+                }
+                self.visual_anchor = None;
+            }
             VimAction::SwapVisualAnchor => {
                 if let Some(ref mut anchor) = self.visual_anchor {
                     let old_anchor_line = anchor.line;
