@@ -14,8 +14,10 @@ pub struct NyxApp {
 
 impl NyxApp {
     pub fn new(file_path: Option<String>, config: NyxConfig) -> Self {
+        let mut editor = Editor::new(file_path, &config.languages);
+        editor.set_tab_size(config.editor.tab_size);
         Self {
-            editor: Editor::new(file_path, &config.languages),
+            editor,
             editor_view: EditorView::new(),
             theme: Theme::default_dark(),
             config,

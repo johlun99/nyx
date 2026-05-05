@@ -1,5 +1,6 @@
 // src/editor.rs
 use crate::buffer::TextBuffer;
+use crate::syntax::indent::compute_indent;
 use crate::syntax::languages::language_for_extension;
 use crate::syntax::SyntaxState;
 use crate::vim::action::SearchDirection;
@@ -37,6 +38,7 @@ pub struct Editor {
     recording_action: Option<LastAction>,
     replaying: bool,
     pub syntax_state: Option<SyntaxState>,
+    pub tab_size: usize,
 }
 
 impl Editor {
@@ -98,11 +100,16 @@ impl Editor {
             recording_action: None,
             replaying: false,
             syntax_state,
+            tab_size: 4,
         }
     }
 
     pub fn mode(&self) -> Mode {
         self.key_parser.mode()
+    }
+
+    pub fn set_tab_size(&mut self, size: usize) {
+        self.tab_size = size;
     }
 
     pub fn apply_action(&mut self, action: VimAction) {
@@ -183,7 +190,25 @@ impl Editor {
                 }
             }
             VimAction::InsertChar(ch) => {
-                self.buffer.insert_char(ch);
+                if ch == '\n' {
+                    let current_line = self.buffer.cursor_line();
+                    self.buffer.insert_char('\n');
+                    let indent = compute_indent(
+                        &self.buffer,
+                        self.syntax_state.as_ref(),
+                        current_line,
+                        self.tab_size,
+                    );
+                    if indent > 0 {
+                        let indent_str: String = " ".repeat(indent);
+                        let offset = self.buffer.cursor_offset();
+                        self.buffer.insert_text_at(offset, &indent_str);
+                        self.buffer
+                            .set_cursor_with_mode(self.buffer.cursor_line(), indent, true);
+                    }
+                } else {
+                    self.buffer.insert_char(ch);
+                }
             }
             VimAction::DeleteCharBefore => {
                 self.buffer.delete_char_before_cursor();
@@ -457,19 +482,33 @@ impl Editor {
             }
             InsertEntry::NewLineBelow => {
                 let line = self.buffer.cursor_line();
-                let next_line_offset = if line + 1 < self.buffer.line_count() {
-                    self.buffer.line_to_char(line + 1)
-                } else {
-                    self.buffer.len_chars()
-                };
-                self.buffer.insert_text_at(next_line_offset, "\n");
-                self.buffer.set_cursor(line + 1, 0);
+                let indent = compute_indent(
+                    &self.buffer,
+                    self.syntax_state.as_ref(),
+                    line,
+                    self.tab_size,
+                );
+                // Insert after the content of the current line (before its trailing \n if any)
+                let insert_offset =
+                    self.buffer.line_to_char(line) + self.buffer.line_content_len(line);
+                let indent_str: String = " ".repeat(indent);
+                self.buffer
+                    .insert_text_at(insert_offset, &format!("\n{}", indent_str));
+                self.buffer.set_cursor_with_mode(line + 1, indent, true);
             }
             InsertEntry::NewLineAbove => {
                 let line = self.buffer.cursor_line();
+                let indent = compute_indent(
+                    &self.buffer,
+                    self.syntax_state.as_ref(),
+                    line,
+                    self.tab_size,
+                );
                 let line_start = self.buffer.line_to_char(line);
-                self.buffer.insert_text_at(line_start, "\n");
-                self.buffer.set_cursor(line, 0);
+                let indent_str: String = " ".repeat(indent);
+                self.buffer
+                    .insert_text_at(line_start, &format!("{}\n", indent_str));
+                self.buffer.set_cursor_with_mode(line, indent, true);
             }
         }
     }
@@ -716,5 +755,59 @@ mod tests {
         let path = tmp.path().to_str().unwrap().to_string();
         let editor = Editor::new(Some(path), &["rust".to_string()]);
         assert!(editor.syntax_state.is_none());
+    }
+
+    #[test]
+    fn new_line_below_copies_indent() {
+        let mut editor = Editor::new(None, &[]);
+        editor.buffer = TextBuffer::from_text("    hello\nworld");
+        editor.buffer.set_cursor(0, 4);
+
+        editor.set_tab_size(4);
+        editor.apply_action(VimAction::EnterInsert(InsertEntry::NewLineBelow));
+
+        // New line should be inserted after line 0 with 4 spaces indent
+        assert_eq!(editor.buffer.cursor_line(), 1);
+        let line = editor.buffer.line_slice(1).to_string();
+        assert!(
+            line.starts_with("    "),
+            "Expected 4 spaces indent, got: {:?}",
+            line
+        );
+        assert_eq!(editor.buffer.cursor_col(), 4);
+    }
+
+    #[test]
+    fn new_line_above_copies_indent() {
+        let mut editor = Editor::new(None, &[]);
+        editor.buffer = TextBuffer::from_text("    hello\nworld");
+        editor.buffer.set_cursor(0, 4);
+
+        editor.set_tab_size(4);
+        editor.apply_action(VimAction::EnterInsert(InsertEntry::NewLineAbove));
+
+        // New line should be inserted above line 0 with 4 spaces indent
+        assert_eq!(editor.buffer.cursor_line(), 0);
+        let line = editor.buffer.line_slice(0).to_string();
+        assert!(
+            line.starts_with("    "),
+            "Expected 4 spaces indent, got: {:?}",
+            line
+        );
+        assert_eq!(editor.buffer.cursor_col(), 4);
+    }
+
+    #[test]
+    fn enter_in_insert_mode_copies_indent() {
+        let mut editor = Editor::new(None, &[]);
+        editor.buffer = TextBuffer::from_text("    hello");
+        editor.buffer.set_cursor_with_mode(0, 9, true); // end of "    hello"
+
+        editor.set_tab_size(4);
+        editor.buffer.begin_undo_group();
+        editor.apply_action(VimAction::InsertChar('\n'));
+
+        assert_eq!(editor.buffer.cursor_line(), 1);
+        assert_eq!(editor.buffer.cursor_col(), 4); // indented to match line above
     }
 }
