@@ -107,6 +107,18 @@ impl TextBuffer {
         self.rope.line_to_char(line_idx)
     }
 
+    pub fn line_to_byte(&self, line_idx: usize) -> usize {
+        self.rope.line_to_byte(line_idx)
+    }
+
+    pub fn byte_to_char(&self, byte_idx: usize) -> usize {
+        self.rope.byte_to_char(byte_idx)
+    }
+
+    pub fn len_bytes(&self) -> usize {
+        self.rope.len_bytes()
+    }
+
     pub fn insert_char(&mut self, ch: char) {
         let offset = self.cursor_offset();
         self.history.push(EditAction::Insert {
