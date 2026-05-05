@@ -6,6 +6,13 @@ const FIELD_COUNT: usize = 6;
 const AVAILABLE_LANGUAGES: &[&str] = &["rust", "json", "python", "javascript", "typescript"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsAction {
+    None,
+    Close,
+    ConfigChanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsField {
     FontFamily,
     FontSize,
@@ -252,6 +259,114 @@ impl SettingsView {
         config_changed
     }
 
+    /// Commit the current edit buffer to the config.
+    /// Returns true if config was changed.
+    pub fn commit_edit(&mut self, config: &mut NyxConfig) -> bool {
+        let changed = match self.editing {
+            Some(SettingsField::FontFamily) => {
+                if !self.edit_buffer.is_empty() {
+                    config.editor.font_family = self.edit_buffer.clone();
+                    true
+                } else {
+                    false
+                }
+            }
+            Some(SettingsField::FontSize) => {
+                if let Ok(size) = self.edit_buffer.parse::<f32>() {
+                    config.editor.font_size = size.clamp(8.0, 72.0);
+                    true
+                } else {
+                    false
+                }
+            }
+            Some(SettingsField::TabSize) => {
+                if let Ok(size) = self.edit_buffer.parse::<usize>() {
+                    config.editor.tab_size = size.clamp(1, 16);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        self.editing = None;
+        self.edit_buffer.clear();
+        changed
+    }
+
+    /// Cancel the current edit without applying changes.
+    pub fn cancel_edit(&mut self) {
+        self.editing = None;
+        self.edit_buffer.clear();
+    }
+
+    /// Handle keyboard input for the settings view.
+    pub fn handle_input(
+        &mut self,
+        ctx: &egui::Context,
+        config: &mut NyxConfig,
+    ) -> SettingsAction {
+        let mut action = SettingsAction::None;
+
+        ctx.input(|input| {
+            if self.editing.is_some() {
+                // In edit mode: route input to edit buffer
+                if input.key_pressed(egui::Key::Escape) {
+                    self.cancel_edit();
+                    return;
+                }
+                if input.key_pressed(egui::Key::Enter) {
+                    if self.commit_edit(config) {
+                        action = SettingsAction::ConfigChanged;
+                    }
+                    return;
+                }
+                if input.key_pressed(egui::Key::Backspace) {
+                    self.edit_buffer.pop();
+                    return;
+                }
+                // Text input goes to edit buffer
+                for event in &input.events {
+                    if let egui::Event::Text(text) = event {
+                        self.edit_buffer.push_str(text);
+                    }
+                }
+            } else {
+                // Navigation mode
+                if input.key_pressed(egui::Key::Escape) {
+                    action = SettingsAction::Close;
+                    return;
+                }
+                if input.key_pressed(egui::Key::J)
+                    || input.key_pressed(egui::Key::ArrowDown)
+                {
+                    if self.selected_row < FIELD_COUNT - 1 {
+                        self.selected_row += 1;
+                    }
+                    return;
+                }
+                if input.key_pressed(egui::Key::K)
+                    || input.key_pressed(egui::Key::ArrowUp)
+                {
+                    if self.selected_row > 0 {
+                        self.selected_row -= 1;
+                    }
+                    return;
+                }
+                if input.key_pressed(egui::Key::Enter) {
+                    if let Some(field) = SettingsField::from_index(self.selected_row) {
+                        if self.activate_field(field, config) {
+                            action = SettingsAction::ConfigChanged;
+                        }
+                    }
+                    return;
+                }
+            }
+        });
+
+        action
+    }
+
     /// Activate a field for editing. For bool/enum fields, toggles immediately and returns true.
     /// For text/number fields, enters edit mode and returns false (no config change yet).
     fn activate_field(&mut self, field: SettingsField, config: &mut NyxConfig) -> bool {
@@ -358,5 +473,105 @@ mod tests {
         assert!(!changed); // no config change yet
         assert_eq!(view.editing, Some(SettingsField::FontFamily));
         assert_eq!(view.edit_buffer, "JetBrains Mono");
+    }
+
+    #[test]
+    fn commit_font_size_valid() {
+        let mut view = SettingsView::new();
+        let mut config = NyxConfig::default();
+
+        view.editing = Some(SettingsField::FontSize);
+        view.edit_buffer = "20".to_string();
+        let changed = view.commit_edit(&mut config);
+        assert!(changed);
+        assert_eq!(config.editor.font_size, 20.0);
+        assert!(view.editing.is_none());
+    }
+
+    #[test]
+    fn commit_font_size_clamps_min() {
+        let mut view = SettingsView::new();
+        let mut config = NyxConfig::default();
+
+        view.editing = Some(SettingsField::FontSize);
+        view.edit_buffer = "2".to_string();
+        let changed = view.commit_edit(&mut config);
+        assert!(changed);
+        assert_eq!(config.editor.font_size, 8.0);
+    }
+
+    #[test]
+    fn commit_font_size_clamps_max() {
+        let mut view = SettingsView::new();
+        let mut config = NyxConfig::default();
+
+        view.editing = Some(SettingsField::FontSize);
+        view.edit_buffer = "100".to_string();
+        let changed = view.commit_edit(&mut config);
+        assert!(changed);
+        assert_eq!(config.editor.font_size, 72.0);
+    }
+
+    #[test]
+    fn commit_font_size_invalid_keeps_old() {
+        let mut view = SettingsView::new();
+        let mut config = NyxConfig::default();
+
+        view.editing = Some(SettingsField::FontSize);
+        view.edit_buffer = "abc".to_string();
+        let changed = view.commit_edit(&mut config);
+        assert!(!changed);
+        assert_eq!(config.editor.font_size, 14.0);
+        assert!(view.editing.is_none());
+    }
+
+    #[test]
+    fn commit_tab_size_valid() {
+        let mut view = SettingsView::new();
+        let mut config = NyxConfig::default();
+
+        view.editing = Some(SettingsField::TabSize);
+        view.edit_buffer = "8".to_string();
+        let changed = view.commit_edit(&mut config);
+        assert!(changed);
+        assert_eq!(config.editor.tab_size, 8);
+    }
+
+    #[test]
+    fn commit_tab_size_clamps() {
+        let mut view = SettingsView::new();
+        let mut config = NyxConfig::default();
+
+        view.editing = Some(SettingsField::TabSize);
+        view.edit_buffer = "0".to_string();
+        view.commit_edit(&mut config);
+        assert_eq!(config.editor.tab_size, 1);
+
+        view.editing = Some(SettingsField::TabSize);
+        view.edit_buffer = "99".to_string();
+        view.commit_edit(&mut config);
+        assert_eq!(config.editor.tab_size, 16);
+    }
+
+    #[test]
+    fn commit_font_family() {
+        let mut view = SettingsView::new();
+        let mut config = NyxConfig::default();
+
+        view.editing = Some(SettingsField::FontFamily);
+        view.edit_buffer = "Fira Code".to_string();
+        let changed = view.commit_edit(&mut config);
+        assert!(changed);
+        assert_eq!(config.editor.font_family, "Fira Code");
+    }
+
+    #[test]
+    fn cancel_edit_restores_state() {
+        let mut view = SettingsView::new();
+        view.editing = Some(SettingsField::FontSize);
+        view.edit_buffer = "99".to_string();
+        view.cancel_edit();
+        assert!(view.editing.is_none());
+        assert!(view.edit_buffer.is_empty());
     }
 }

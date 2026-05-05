@@ -2,7 +2,7 @@ mod keybindings;
 mod settings;
 
 pub use keybindings::KeybindingsView;
-pub use settings::SettingsView;
+pub use settings::{SettingsAction, SettingsView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppView {
