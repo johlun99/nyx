@@ -226,6 +226,9 @@ impl Editor {
                     self.replaying = false;
                 }
             }
+            VimAction::EnterSearch(_) => {}
+            VimAction::SearchNext => {}
+            VimAction::SearchPrev => {}
             VimAction::Noop => unreachable!(),
         }
     }

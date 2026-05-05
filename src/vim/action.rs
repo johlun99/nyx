@@ -2,6 +2,12 @@ use crate::vim::mode::Mode;
 use crate::vim::text_object::TextObject;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum SearchDirection {
+    Forward,
+    Backward,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum VimAction {
     SwitchMode(Mode),
     Motion(MotionKind),
@@ -18,6 +24,9 @@ pub enum VimAction {
     VisualOperator(VisualOperatorAction),
     SwapVisualAnchor,
     DotRepeat,
+    EnterSearch(SearchDirection),
+    SearchNext,
+    SearchPrev,
     Noop,
 }
 
