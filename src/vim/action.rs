@@ -14,7 +14,24 @@ pub enum VimAction {
     Redo,
     /// Enter insert mode, optionally with a preparatory motion/action
     EnterInsert(InsertEntry),
+    EnterVisual(VisualKind),
+    VisualOperator(VisualOperatorAction),
+    SwapVisualAnchor,
     Noop,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VisualKind {
+    Char,
+    Line,
+    Block,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VisualOperatorAction {
+    Delete,
+    Change,
+    Yank,
 }
 
 #[derive(Debug, Clone, PartialEq)]

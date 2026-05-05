@@ -102,6 +102,9 @@ impl Editor {
                     self.operator_engine.paste(&mut self.buffer, register);
                 }
             }
+            VimAction::EnterVisual(_) => {} // Handled in Task 10
+            VimAction::VisualOperator(_) => {} // Handled in Task 10
+            VimAction::SwapVisualAnchor => {} // Handled in Task 10
             VimAction::Noop => unreachable!(),
         }
     }

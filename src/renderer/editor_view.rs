@@ -133,6 +133,25 @@ impl EditorView {
                         );
                         painter.rect_filled(cursor_rect, 0.0, theme.cursor_insert);
                     }
+                    Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
+                        // Block cursor for visual modes (same as normal)
+                        let cursor_rect = Rect::from_min_size(
+                            egui::pos2(text_x + cursor_x, y),
+                            Vec2::new(char_width, line_height),
+                        );
+                        painter.rect_filled(cursor_rect, 0.0, theme.cursor);
+
+                        // Draw character under cursor with inverted color
+                        if let Some(ch) = display.chars().nth(cursor_col) {
+                            painter.text(
+                                egui::pos2(text_x + cursor_x, y),
+                                egui::Align2::LEFT_TOP,
+                                ch.to_string(),
+                                font_id.clone(),
+                                theme.background,
+                            );
+                        }
+                    }
                 }
             }
         }

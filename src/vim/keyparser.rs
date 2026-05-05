@@ -48,6 +48,7 @@ impl KeyParser {
             Mode::Normal => self.handle_normal(ch),
             Mode::Insert => self.handle_insert(ch),
             Mode::Command => VimAction::Noop, // command input handled separately
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock => self.handle_normal(ch), // temporary: delegate to normal mode handling
         }
     }
 
