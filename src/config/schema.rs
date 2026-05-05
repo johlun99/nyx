@@ -38,6 +38,24 @@ impl<'de> Deserialize<'de> for LineNumberMode {
     }
 }
 
+impl LineNumberMode {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Absolute => Self::Relative,
+            Self::Relative => Self::Off,
+            Self::Off => Self::Absolute,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Absolute => "absolute",
+            Self::Relative => "relative",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EditorConfig {
     pub font_family: String,
@@ -292,6 +310,19 @@ impl NyxConfig {
 
     pub fn config_path() -> std::path::PathBuf {
         Self::config_dir().join("config.json")
+    }
+
+    /// Saves the current config to the given path as pretty-printed JSON.
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+        }
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        std::fs::write(path, json)
+            .map_err(|e| format!("Failed to write config: {}", e))?;
+        Ok(())
     }
 }
 
@@ -549,5 +580,51 @@ mod tests {
         }"#;
         let config: NyxConfig = serde_json::from_str(json).unwrap();
         assert!(config.languages.is_empty());
+    }
+
+    #[test]
+    fn save_writes_config_to_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("config.json");
+        let config = NyxConfig::default();
+        config.save(&path).unwrap();
+        assert!(path.exists());
+        let loaded = NyxConfig::load_or_create(&path);
+        assert_eq!(loaded.editor.font_size, 14.0);
+        assert_eq!(loaded.editor.tab_size, 4);
+    }
+
+    #[test]
+    fn save_creates_parent_directories() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("subdir").join("deep").join("config.json");
+        let config = NyxConfig::default();
+        config.save(&path).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn save_overwrites_existing_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("config.json");
+        let mut config = NyxConfig::default();
+        config.editor.font_size = 20.0;
+        config.save(&path).unwrap();
+        let loaded = NyxConfig::load_or_create(&path);
+        assert_eq!(loaded.editor.font_size, 20.0);
+    }
+
+    #[test]
+    fn line_number_mode_next_cycles() {
+        assert_eq!(LineNumberMode::Absolute.next(), LineNumberMode::Relative);
+        assert_eq!(LineNumberMode::Relative.next(), LineNumberMode::Off);
+        assert_eq!(LineNumberMode::Off.next(), LineNumberMode::Absolute);
+    }
+
+    #[test]
+    fn line_number_mode_label() {
+        assert_eq!(LineNumberMode::Absolute.label(), "absolute");
+        assert_eq!(LineNumberMode::Relative.label(), "relative");
+        assert_eq!(LineNumberMode::Off.label(), "off");
     }
 }
