@@ -157,14 +157,96 @@ impl EditorView {
                 painter.rect_filled(sel_rect, 0.0, theme.selection);
             }
 
-            // Text content (drawn after highlights so text is visible)
-            painter.text(
-                egui::pos2(text_x, y),
-                egui::Align2::LEFT_TOP,
-                display,
-                font_id.clone(),
-                theme.foreground,
-            );
+            // Text content — with syntax highlighting if available
+            let syntax_spans = editor.syntax_highlights_for_line(i, theme);
+            if syntax_spans.is_empty() {
+                // Monochrome fallback
+                painter.text(
+                    egui::pos2(text_x, y),
+                    egui::Align2::LEFT_TOP,
+                    display,
+                    font_id.clone(),
+                    theme.foreground,
+                );
+            } else {
+                // Per-span colored rendering
+                let display_chars: Vec<char> = display.chars().collect();
+                let mut last_end: usize = 0;
+
+                for (col_start, col_end, color) in &syntax_spans {
+                    let col_start = *col_start;
+                    let col_end = (*col_end).min(display_chars.len());
+                    if col_start > display_chars.len() {
+                        continue;
+                    }
+
+                    // Draw unhighlighted gap before this span
+                    if col_start > last_end {
+                        let gap_text: String = display_chars[last_end..col_start].iter().collect();
+                        let gap_x = text_x
+                            + if last_end == 0 {
+                                0.0
+                            } else {
+                                let prefix: String = display_chars[..last_end].iter().collect();
+                                painter
+                                    .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                                    .rect
+                                    .width()
+                            };
+                        painter.text(
+                            egui::pos2(gap_x, y),
+                            egui::Align2::LEFT_TOP,
+                            &gap_text,
+                            font_id.clone(),
+                            theme.foreground,
+                        );
+                    }
+
+                    // Draw highlighted span
+                    let span_text: String = display_chars[col_start..col_end].iter().collect();
+                    let span_x = text_x
+                        + if col_start == 0 {
+                            0.0
+                        } else {
+                            let prefix: String = display_chars[..col_start].iter().collect();
+                            painter
+                                .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                                .rect
+                                .width()
+                        };
+                    painter.text(
+                        egui::pos2(span_x, y),
+                        egui::Align2::LEFT_TOP,
+                        &span_text,
+                        font_id.clone(),
+                        *color,
+                    );
+
+                    last_end = col_end;
+                }
+
+                // Draw remaining text after last span
+                if last_end < display_chars.len() {
+                    let remaining: String = display_chars[last_end..].iter().collect();
+                    let rem_x = text_x
+                        + if last_end == 0 {
+                            0.0
+                        } else {
+                            let prefix: String = display_chars[..last_end].iter().collect();
+                            painter
+                                .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                                .rect
+                                .width()
+                        };
+                    painter.text(
+                        egui::pos2(rem_x, y),
+                        egui::Align2::LEFT_TOP,
+                        &remaining,
+                        font_id.clone(),
+                        theme.foreground,
+                    );
+                }
+            }
 
             // Cursor (only on cursor line)
             if i == buffer.cursor_line() {

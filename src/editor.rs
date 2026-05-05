@@ -1,5 +1,7 @@
 // src/editor.rs
 use crate::buffer::TextBuffer;
+use crate::syntax::languages::language_for_extension;
+use crate::syntax::SyntaxState;
 use crate::vim::action::SearchDirection;
 use crate::vim::command::{CommandParser, CommandResult};
 use crate::vim::motion::execute_motion;
@@ -34,10 +36,11 @@ pub struct Editor {
     pub search_input: Option<String>,
     recording_action: Option<LastAction>,
     replaying: bool,
+    pub syntax_state: Option<SyntaxState>,
 }
 
 impl Editor {
-    pub fn new(file_path: Option<String>) -> Self {
+    pub fn new(file_path: Option<String>, configured_languages: &[String]) -> Self {
         let buffer = if let Some(ref path) = file_path {
             match crate::file_io::read_file(std::path::Path::new(path)) {
                 Ok(content) => TextBuffer::from_text(&content),
@@ -52,13 +55,41 @@ impl Editor {
             )
         };
 
+        let mut status_message = None;
+        let syntax_state = if let Some(ref path) = file_path {
+            let ext = std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if let Some(lang_name) = language_for_extension(ext) {
+                if configured_languages.iter().any(|l| l == lang_name) {
+                    match SyntaxState::new(lang_name, ext) {
+                        Some(mut state) => {
+                            state.parse(&buffer.text());
+                            Some(state)
+                        }
+                        None => None,
+                    }
+                } else {
+                    status_message = Some(format!(
+                        "No syntax for .{ext} \u{2014} add \"{lang_name}\" to languages in config"
+                    ));
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         Self {
             buffer,
             key_parser: KeyParser::new(),
             operator_engine: OperatorEngine::new(),
             file_path,
             should_quit: false,
-            status_message: None,
+            status_message,
             command_parser: CommandParser::new(),
             visual_anchor: None,
             last_action: None,
@@ -66,6 +97,7 @@ impl Editor {
             search_input: None,
             recording_action: None,
             replaying: false,
+            syntax_state,
         }
     }
 
@@ -88,6 +120,9 @@ impl Editor {
             | VimAction::Undo
             | VimAction::Redo => {
                 self.search_state.matches.clear();
+                if let Some(ref mut ss) = self.syntax_state {
+                    ss.mark_dirty();
+                }
             }
             _ => {}
         }
@@ -562,6 +597,28 @@ impl Editor {
             .collect()
     }
 
+    /// Re-parse syntax tree if dirty. Call before rendering.
+    pub fn ensure_syntax_parsed(&mut self) {
+        if let Some(ref mut ss) = self.syntax_state {
+            ss.ensure_parsed(&self.buffer.text());
+        }
+    }
+
+    /// Get syntax highlight spans for a line.
+    /// Returns Vec of (col_start, col_end, color) in char offsets.
+    pub fn syntax_highlights_for_line(
+        &self,
+        line_idx: usize,
+        theme: &crate::renderer::theme::Theme,
+    ) -> Vec<(usize, usize, eframe::egui::Color32)> {
+        match self.syntax_state {
+            Some(ref ss) => {
+                crate::syntax::highlighter::highlights_for_line(ss, &self.buffer, line_idx, theme)
+            }
+            None => Vec::new(),
+        }
+    }
+
     fn save_file(&mut self) {
         if let Some(ref path) = self.file_path {
             match crate::file_io::write_file(std::path::Path::new(path), &self.buffer.text()) {
@@ -587,7 +644,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_operator() {
-        let mut editor = Editor::new(None);
+        let mut editor = Editor::new(None, &[]);
         editor.buffer = TextBuffer::from_text("hello\nworld\nfoo");
         editor.buffer.set_cursor(0, 0);
 
@@ -602,7 +659,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_insert_session() {
-        let mut editor = Editor::new(None);
+        let mut editor = Editor::new(None, &[]);
         editor.buffer = TextBuffer::from_text("hello");
         editor.buffer.set_cursor(0, 4); // on 'o'
 
@@ -620,7 +677,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_with_count_override() {
-        let mut editor = Editor::new(None);
+        let mut editor = Editor::new(None, &[]);
         editor.buffer = TextBuffer::from_text("aaa\nbbb\nccc\nddd");
         editor.buffer.set_cursor(0, 0);
 
@@ -632,5 +689,32 @@ mod tests {
         editor.key_parser.handle_key('2');
         editor.apply_action(VimAction::DotRepeat);
         assert_eq!(editor.buffer.text(), "ddd");
+    }
+
+    #[test]
+    fn editor_creates_syntax_state_for_configured_language() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        std::fs::write(tmp.path(), "fn main() {}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        assert!(editor.syntax_state.is_some());
+    }
+
+    #[test]
+    fn editor_no_syntax_state_for_unconfigured_language() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        std::fs::write(tmp.path(), "fn main() {}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &[]);
+        assert!(editor.syntax_state.is_none());
+    }
+
+    #[test]
+    fn editor_no_syntax_state_for_unknown_extension() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".xyz").unwrap();
+        std::fs::write(tmp.path(), "hello").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        assert!(editor.syntax_state.is_none());
     }
 }
