@@ -53,6 +53,7 @@ impl Editor {
         self.status_message = None;
 
         let count = self.key_parser.take_count();
+        let register = self.key_parser.take_register();
         match action {
             VimAction::SwitchMode(Mode::Normal) => {
                 self.buffer.end_undo_group();
@@ -90,15 +91,15 @@ impl Editor {
             }
             VimAction::Operator(ref op_action) => {
                 for _ in 0..count {
-                    self.operator_engine.execute(&mut self.buffer, op_action);
+                    self.operator_engine.execute(&mut self.buffer, op_action, register);
                 }
             }
             VimAction::Yank(ref motion) => {
-                self.operator_engine.yank_motion(&mut self.buffer, motion);
+                self.operator_engine.yank_motion(&mut self.buffer, motion, register);
             }
             VimAction::Paste => {
                 for _ in 0..count {
-                    self.operator_engine.paste(&mut self.buffer);
+                    self.operator_engine.paste(&mut self.buffer, register);
                 }
             }
             VimAction::Noop => unreachable!(),

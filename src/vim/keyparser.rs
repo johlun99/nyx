@@ -28,6 +28,11 @@ impl KeyParser {
         self.count.take().unwrap_or(1)
     }
 
+    /// Returns the pending register selection, consuming it. Stub — always returns None until Task 3.
+    pub fn take_register(&mut self) -> Option<char> {
+        None
+    }
+
     #[cfg(test)]
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
