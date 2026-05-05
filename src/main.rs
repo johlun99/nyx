@@ -11,9 +11,7 @@ fn main() -> eframe::Result<()> {
     tracing_subscriber::fmt::init();
 
     let file_path = std::env::args().nth(1);
-    let config = crate::config::NyxConfig::load_or_create(
-        &crate::config::NyxConfig::config_path(),
-    );
+    let config = crate::config::NyxConfig::load_or_create(&crate::config::NyxConfig::config_path());
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

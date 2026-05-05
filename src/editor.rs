@@ -1,9 +1,9 @@
 // src/editor.rs
 use crate::buffer::TextBuffer;
-use crate::vim::{KeyParser, VimAction, InsertEntry, Mode};
 use crate::vim::command::{CommandParser, CommandResult};
 use crate::vim::motion::execute_motion;
 use crate::vim::operator::OperatorEngine;
+use crate::vim::{InsertEntry, KeyParser, Mode, VimAction};
 
 pub struct Editor {
     pub buffer: TextBuffer,
@@ -111,16 +111,25 @@ impl Editor {
             InsertEntry::AfterCursor => {
                 let content_len = self.buffer.line_content_len(self.buffer.cursor_line());
                 let new_col = (self.buffer.cursor_col() + 1).min(content_len);
-                self.buffer.set_cursor_with_mode(self.buffer.cursor_line(), new_col, true);
+                self.buffer
+                    .set_cursor_with_mode(self.buffer.cursor_line(), new_col, true);
             }
             InsertEntry::EndOfLine => {
                 let content_len = self.buffer.line_content_len(self.buffer.cursor_line());
-                self.buffer.set_cursor_with_mode(self.buffer.cursor_line(), content_len, true);
+                self.buffer
+                    .set_cursor_with_mode(self.buffer.cursor_line(), content_len, true);
             }
             InsertEntry::FirstNonBlank => {
-                let line = self.buffer.line_slice(self.buffer.cursor_line()).to_string();
-                let col = line.chars().take_while(|c| c.is_whitespace() && *c != '\n').count();
-                self.buffer.set_cursor_with_mode(self.buffer.cursor_line(), col, true);
+                let line = self
+                    .buffer
+                    .line_slice(self.buffer.cursor_line())
+                    .to_string();
+                let col = line
+                    .chars()
+                    .take_while(|c| c.is_whitespace() && *c != '\n')
+                    .count();
+                self.buffer
+                    .set_cursor_with_mode(self.buffer.cursor_line(), col, true);
             }
             InsertEntry::NewLineBelow => {
                 let line = self.buffer.cursor_line();
