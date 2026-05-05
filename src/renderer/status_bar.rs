@@ -57,9 +57,8 @@ impl StatusBar {
             );
         }
 
-        // Command line input (when in command mode)
+        // Command/search line input (already includes prefix like ":", "/" or "?")
         if let Some(input) = command_input {
-            let cmd_text = format!(":{}", input);
             let cmd_rect = egui::Rect::from_min_size(
                 egui::pos2(rect.min.x, bar_rect.min.y - line_height - 2.0),
                 egui::vec2(rect.width(), line_height + 2.0),
@@ -68,7 +67,7 @@ impl StatusBar {
             painter.text(
                 egui::pos2(cmd_rect.min.x + 10.0, cmd_rect.min.y),
                 egui::Align2::LEFT_TOP,
-                &cmd_text,
+                input,
                 font_id.clone(),
                 theme.foreground,
             );

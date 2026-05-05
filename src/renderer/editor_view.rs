@@ -24,7 +24,9 @@ impl EditorView {
         let buffer = &editor.buffer;
         let mode = editor.mode();
         let file_path = editor.file_path.as_deref();
-        let command_input = editor.command_input();
+        let command_display = editor.command_input().map(|s| format!(":{}", s));
+        let search_display = editor.search_input_display();
+        let bottom_input = search_display.or(command_display);
         let status_message = editor.status_message.as_deref();
 
         let font_id = egui::FontId::monospace(font_size);
@@ -50,7 +52,7 @@ impl EditorView {
             line_height,
             mode,
             file_path,
-            command_input,
+            bottom_input.as_deref(),
             status_message,
         );
 
@@ -82,16 +84,7 @@ impl EditorView {
                 num_color,
             );
 
-            // Text content
-            painter.text(
-                egui::pos2(text_x, y),
-                egui::Align2::LEFT_TOP,
-                display,
-                font_id.clone(),
-                theme.foreground,
-            );
-
-            // Search match highlights
+            // Search match highlights (drawn before text so text is visible on top)
             for (match_start_col, match_end_col, is_current) in
                 editor.search_highlights_for_line(i)
             {
@@ -123,7 +116,7 @@ impl EditorView {
                 painter.rect_filled(match_rect, 0.0, color);
             }
 
-            // Selection highlight (visual modes)
+            // Selection highlight (visual modes, drawn before text so text is visible on top)
             if let Some((sel_start_col, sel_end_col)) = editor.visual_highlights_for_line(i) {
                 let sel_x_start: f32 = if sel_start_col == 0 {
                     0.0
@@ -147,6 +140,15 @@ impl EditorView {
                 );
                 painter.rect_filled(sel_rect, 0.0, theme.selection);
             }
+
+            // Text content (drawn after highlights so text is visible)
+            painter.text(
+                egui::pos2(text_x, y),
+                egui::Align2::LEFT_TOP,
+                display,
+                font_id.clone(),
+                theme.foreground,
+            );
 
             // Cursor (only on cursor line)
             if i == buffer.cursor_line() {
