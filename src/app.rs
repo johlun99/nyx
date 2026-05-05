@@ -2,7 +2,7 @@
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::renderer::{EditorView, Theme};
-use crate::views::{AppView, KeybindingsView, SettingsView};
+use crate::views::{AppView, KeybindingsView, SettingsAction, SettingsView};
 use crate::vim::{Mode, VimAction, VisualKind};
 use eframe::egui;
 
@@ -66,7 +66,17 @@ impl NyxApp {
                 return;
             }
             AppView::Settings => {
-                // Settings input will be added in Task 8
+                let action = self.settings_view.handle_input(ctx, &mut self.config);
+                match action {
+                    SettingsAction::Close => {
+                        self.active_view = AppView::Editor;
+                    }
+                    SettingsAction::ConfigChanged => {
+                        self.editor.set_tab_size(self.config.editor.tab_size);
+                        let _ = self.config.save(&NyxConfig::config_path());
+                    }
+                    SettingsAction::None => {}
+                }
                 return;
             }
             AppView::Editor => {}
@@ -217,17 +227,15 @@ impl eframe::App for NyxApp {
                     });
             }
             AppView::Settings => {
-                // Settings rendering will be added in Task 8
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE.fill(self.theme.background))
-                    .show(ctx, |ui| {
-                        ui.centered_and_justified(|ui| {
-                            ui.label(
-                                egui::RichText::new("Settings (coming soon)")
-                                    .color(self.theme.foreground),
-                            );
-                        });
-                    });
+                let changed = self.settings_view.render(
+                    ctx,
+                    &mut self.config,
+                    &self.theme,
+                );
+                if changed {
+                    self.editor.set_tab_size(self.config.editor.tab_size);
+                    let _ = self.config.save(&NyxConfig::config_path());
+                }
             }
             AppView::Keybindings => {
                 // Render editor behind (it will be dimmed by the overlay)
