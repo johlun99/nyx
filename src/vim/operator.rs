@@ -2,6 +2,7 @@ use crate::buffer::TextBuffer;
 use crate::vim::action::{MotionKind, OperatorAction};
 use crate::vim::motion::execute_motion;
 use crate::vim::register::RegisterFile;
+use crate::vim::text_object::resolve_text_object;
 
 #[derive(Default)]
 pub struct OperatorEngine {
@@ -51,6 +52,28 @@ impl OperatorEngine {
                 let line_char_len = buffer.line_len_chars(line);
                 let content = buffer.slice(line_start, line_start + line_char_len);
                 self.registers.set(register, content, true);
+            }
+            OperatorAction::DeleteTextObject(ref obj) => {
+                if let Some((start, end)) = resolve_text_object(buffer, obj) {
+                    let content = buffer.slice(start, end);
+                    self.registers.set(register, content, false);
+                    buffer.delete_range(start, end);
+                    buffer.update_cursor_from_offset(start);
+                }
+            }
+            OperatorAction::ChangeTextObject(ref obj) => {
+                if let Some((start, end)) = resolve_text_object(buffer, obj) {
+                    let content = buffer.slice(start, end);
+                    self.registers.set(register, content, false);
+                    buffer.delete_range(start, end);
+                    buffer.update_cursor_from_offset(start);
+                }
+            }
+            OperatorAction::YankTextObject(ref obj) => {
+                if let Some((start, end)) = resolve_text_object(buffer, obj) {
+                    let content = buffer.slice(start, end);
+                    self.registers.set(register, content, false);
+                }
             }
         }
     }
@@ -113,6 +136,7 @@ impl OperatorEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vim::text_object::{TextObject, TextObjectKind};
 
     #[test]
     fn delete_line() {
@@ -214,5 +238,47 @@ mod tests {
         assert_eq!(engine.registers.get(Some('a')).content, "hello\n");
         assert_eq!(engine.registers.get(None).content, "hello\n");
         assert_eq!(buf.text(), "world\nfoo");
+    }
+
+    #[test]
+    fn delete_inner_word() {
+        let mut buf = TextBuffer::from_text("hello world foo");
+        buf.set_cursor(0, 6); // on 'w'
+        let mut engine = OperatorEngine::new();
+        engine.execute(
+            &mut buf,
+            &OperatorAction::DeleteTextObject(TextObject::Inner(TextObjectKind::Word)),
+            None,
+        );
+        assert_eq!(buf.text(), "hello  foo");
+        assert_eq!(engine.registers.get(None).content, "world");
+    }
+
+    #[test]
+    fn change_inner_quotes() {
+        let mut buf = TextBuffer::from_text("say \"hello\" end");
+        buf.set_cursor(0, 6); // inside quotes
+        let mut engine = OperatorEngine::new();
+        engine.execute(
+            &mut buf,
+            &OperatorAction::ChangeTextObject(TextObject::Inner(TextObjectKind::DoubleQuote)),
+            None,
+        );
+        assert_eq!(buf.text(), "say \"\" end");
+        assert_eq!(engine.registers.get(None).content, "hello");
+    }
+
+    #[test]
+    fn yank_around_parens() {
+        let mut buf = TextBuffer::from_text("call(x, y) end");
+        buf.set_cursor(0, 6);
+        let mut engine = OperatorEngine::new();
+        engine.execute(
+            &mut buf,
+            &OperatorAction::YankTextObject(TextObject::Around(TextObjectKind::Paren)),
+            None,
+        );
+        assert_eq!(buf.text(), "call(x, y) end"); // unchanged
+        assert_eq!(engine.registers.get(None).content, "(x, y)");
     }
 }

@@ -1,4 +1,5 @@
 use crate::vim::mode::Mode;
+use crate::vim::text_object::TextObject;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VimAction {
@@ -49,4 +50,7 @@ pub enum OperatorAction {
     DeleteLine,
     ChangeLine,
     YankLine,
+    DeleteTextObject(TextObject),
+    ChangeTextObject(TextObject),
+    YankTextObject(TextObject),
 }

@@ -1,5 +1,6 @@
 use crate::vim::action::*;
 use crate::vim::mode::Mode;
+use crate::vim::text_object::{TextObject, TextObjectKind};
 
 pub struct KeyParser {
     mode: Mode,
@@ -100,6 +101,45 @@ impl KeyParser {
         // Pending multi-char sequences
         if !self.pending.is_empty() {
             let combined = format!("{}{}", self.pending, ch);
+
+            // 3-char text object sequences: operator + i/a + object kind
+            // Intercept "di", "da", "ci", "ca", "yi", "ya" to wait for one more char.
+            if combined.len() == 2 {
+                let first = combined.chars().next().unwrap();
+                if (first == 'd' || first == 'c' || first == 'y') && (ch == 'i' || ch == 'a') {
+                    self.pending = combined;
+                    return VimAction::Noop;
+                }
+            }
+
+            if combined.len() == 3 {
+                // Text object: e.g. "diw", "ci\"", "ya("
+                let mut chars_iter = combined.chars();
+                let op = chars_iter.next().unwrap();
+                let scope = chars_iter.next().unwrap();
+                let kind_ch = chars_iter.next().unwrap();
+
+                self.pending.clear();
+
+                if let Some(kind) = Self::char_to_text_object_kind(kind_ch) {
+                    let text_obj = match scope {
+                        'i' => TextObject::Inner(kind),
+                        'a' => TextObject::Around(kind),
+                        _ => return VimAction::Noop,
+                    };
+                    return match op {
+                        'd' => VimAction::Operator(OperatorAction::DeleteTextObject(text_obj)),
+                        'c' => {
+                            self.mode = Mode::Insert;
+                            VimAction::Operator(OperatorAction::ChangeTextObject(text_obj))
+                        }
+                        'y' => VimAction::Operator(OperatorAction::YankTextObject(text_obj)),
+                        _ => VimAction::Noop,
+                    };
+                }
+                return VimAction::Noop;
+            }
+
             self.pending.clear();
             return match combined.as_str() {
                 "gg" => VimAction::Motion(MotionKind::FileTop),
@@ -222,11 +262,25 @@ impl KeyParser {
             _ => None,
         }
     }
+
+    fn char_to_text_object_kind(ch: char) -> Option<TextObjectKind> {
+        match ch {
+            'w' => Some(TextObjectKind::Word),
+            'W' => Some(TextObjectKind::BigWord),
+            '"' => Some(TextObjectKind::DoubleQuote),
+            '\'' => Some(TextObjectKind::SingleQuote),
+            '(' | ')' => Some(TextObjectKind::Paren),
+            '[' | ']' => Some(TextObjectKind::Bracket),
+            '{' | '}' => Some(TextObjectKind::Brace),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vim::text_object::{TextObject, TextObjectKind};
 
     #[test]
     fn normal_mode_i_enters_insert() {
@@ -437,5 +491,57 @@ mod tests {
         let action = parser.handle_key('p');
         assert_eq!(action, VimAction::Paste);
         assert_eq!(parser.take_register(), Some('a'));
+    }
+
+    #[test]
+    fn text_object_diw() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('d'), VimAction::Noop);
+        assert_eq!(parser.handle_key('i'), VimAction::Noop);
+        assert_eq!(
+            parser.handle_key('w'),
+            VimAction::Operator(OperatorAction::DeleteTextObject(
+                TextObject::Inner(TextObjectKind::Word)
+            ))
+        );
+    }
+
+    #[test]
+    fn text_object_ci_double_quote() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('c');
+        parser.handle_key('i');
+        let action = parser.handle_key('"');
+        assert_eq!(
+            action,
+            VimAction::Operator(OperatorAction::ChangeTextObject(
+                TextObject::Inner(TextObjectKind::DoubleQuote)
+            ))
+        );
+        assert_eq!(parser.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn text_object_ya_paren() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('y');
+        parser.handle_key('a');
+        let action = parser.handle_key('(');
+        assert_eq!(
+            action,
+            VimAction::Operator(OperatorAction::YankTextObject(
+                TextObject::Around(TextObjectKind::Paren)
+            ))
+        );
+    }
+
+    #[test]
+    fn text_object_invalid_resets() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('d');
+        parser.handle_key('i');
+        assert_eq!(parser.handle_key('z'), VimAction::Noop); // invalid object
+        // Parser should be clean
+        assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
     }
 }
