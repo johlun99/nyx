@@ -204,21 +204,74 @@ fn resolve_around_quote(chars: &[char], offset: usize, quote: char) -> Option<(u
 }
 
 fn resolve_inner_bracket(
-    _chars: &[char],
-    _offset: usize,
-    _open: char,
-    _close: char,
+    chars: &[char],
+    offset: usize,
+    open: char,
+    close: char,
 ) -> Option<(usize, usize)> {
-    None // Implemented in Task 6
+    // Find the opening bracket: scan left from cursor
+    let mut open_pos = None;
+
+    // If cursor is on the open bracket, use it
+    if chars[offset] == open {
+        open_pos = Some(offset);
+    } else if chars[offset] == close {
+        // Cursor on close bracket: find matching open
+        let mut depth = 1i32;
+        for i in (0..offset).rev() {
+            if chars[i] == close {
+                depth += 1;
+            } else if chars[i] == open {
+                depth -= 1;
+                if depth == 0 {
+                    open_pos = Some(i);
+                    break;
+                }
+            }
+        }
+    } else {
+        // Scan left for the enclosing open bracket
+        let mut depth = 0i32;
+        for i in (0..=offset).rev() {
+            if chars[i] == close && i != offset {
+                depth += 1;
+            } else if chars[i] == open {
+                if depth == 0 {
+                    open_pos = Some(i);
+                    break;
+                }
+                depth -= 1;
+            }
+        }
+    }
+
+    let open_pos = open_pos?;
+
+    // Find matching close bracket
+    let mut depth = 1i32;
+    for i in (open_pos + 1)..chars.len() {
+        if chars[i] == open {
+            depth += 1;
+        } else if chars[i] == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some((open_pos + 1, i));
+            }
+        }
+    }
+
+    None
 }
 
 fn resolve_around_bracket(
-    _chars: &[char],
-    _offset: usize,
-    _open: char,
-    _close: char,
+    chars: &[char],
+    offset: usize,
+    open: char,
+    close: char,
 ) -> Option<(usize, usize)> {
-    None // Implemented in Task 6
+    let inner = resolve_inner_bracket(chars, offset, open, close)?;
+    // Around includes the brackets themselves
+    Some((inner.0 - 1, inner.1 + 1))
 }
 
 #[cfg(test)]
@@ -350,5 +403,87 @@ mod tests {
         buf.set_cursor(0, 4); // on first "
         let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::DoubleQuote));
         assert_eq!(range, Some((5, 5))); // empty range
+    }
+
+    // --- Brackets ---
+
+    #[test]
+    fn inner_paren() {
+        let mut buf = TextBuffer::from_text("call(x, y)");
+        buf.set_cursor(0, 6); // on ','
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Paren));
+        assert_eq!(range, Some((5, 9))); // "x, y"
+    }
+
+    #[test]
+    fn around_paren() {
+        let mut buf = TextBuffer::from_text("call(x, y)");
+        buf.set_cursor(0, 6);
+        let range = resolve_text_object(&buf, &TextObject::Around(TextObjectKind::Paren));
+        assert_eq!(range, Some((4, 10))); // "(x, y)"
+    }
+
+    #[test]
+    fn inner_bracket() {
+        let mut buf = TextBuffer::from_text("arr[1, 2]");
+        buf.set_cursor(0, 5);
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Bracket));
+        assert_eq!(range, Some((4, 8))); // "1, 2"
+    }
+
+    #[test]
+    fn inner_brace() {
+        let mut buf = TextBuffer::from_text("fn() { body }");
+        buf.set_cursor(0, 8); // on 'o' of body
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Brace));
+        assert_eq!(range, Some((6, 12))); // " body "
+    }
+
+    #[test]
+    fn nested_parens() {
+        let mut buf = TextBuffer::from_text("a(b(c)d)e");
+        buf.set_cursor(0, 4); // on 'c' inside inner parens
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Paren));
+        assert_eq!(range, Some((4, 5))); // "c" (innermost)
+    }
+
+    #[test]
+    fn nested_parens_outer() {
+        let mut buf = TextBuffer::from_text("a(b(c)d)e");
+        buf.set_cursor(0, 2); // on 'b' — between outer parens but outside inner
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Paren));
+        assert_eq!(range, Some((2, 7))); // "b(c)d"
+    }
+
+    #[test]
+    fn bracket_multiline() {
+        let mut buf = TextBuffer::from_text("{\n  hello\n}");
+        buf.set_cursor(1, 2); // on 'h' of hello (line 1, col 2)
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Brace));
+        assert_eq!(range, Some((1, 10))); // "\n  hello\n"
+    }
+
+    #[test]
+    fn bracket_no_match() {
+        let mut buf = TextBuffer::from_text("no brackets");
+        buf.set_cursor(0, 3);
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Paren));
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn cursor_on_opening_bracket() {
+        let mut buf = TextBuffer::from_text("(hello)");
+        buf.set_cursor(0, 0); // on '('
+        let range = resolve_text_object(&buf, &TextObject::Inner(TextObjectKind::Paren));
+        assert_eq!(range, Some((1, 6))); // "hello"
+    }
+
+    #[test]
+    fn around_brace() {
+        let mut buf = TextBuffer::from_text("fn() { body }");
+        buf.set_cursor(0, 8);
+        let range = resolve_text_object(&buf, &TextObject::Around(TextObjectKind::Brace));
+        assert_eq!(range, Some((5, 13))); // "{ body }"
     }
 }
