@@ -528,6 +528,39 @@ impl Editor {
         })
     }
 
+    /// Get search highlight ranges for a visible line.
+    /// Returns Vec of (start_col, end_col, is_current) tuples.
+    pub fn search_highlights_for_line(&self, line_idx: usize) -> Vec<(usize, usize, bool)> {
+        if self.search_state.matches.is_empty() {
+            return Vec::new();
+        }
+
+        let line_start = self.buffer.line_to_char(line_idx);
+        let line_end = line_start + self.buffer.line_len_chars(line_idx);
+        let current_idx = self.search_state.current_match_index();
+
+        self.search_state
+            .matches
+            .iter()
+            .enumerate()
+            .filter(|(_, &(start, end))| end > line_start && start < line_end)
+            .map(|(idx, &(start, end))| {
+                let col_start = if start > line_start {
+                    start - line_start
+                } else {
+                    0
+                };
+                let col_end = if end < line_end {
+                    end - line_start
+                } else {
+                    self.buffer.line_content_len(line_idx)
+                };
+                let is_current = current_idx == Some(idx);
+                (col_start, col_end, is_current)
+            })
+            .collect()
+    }
+
     fn save_file(&mut self) {
         if let Some(ref path) = self.file_path {
             match crate::file_io::write_file(std::path::Path::new(path), &self.buffer.text()) {

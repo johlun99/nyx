@@ -91,6 +91,38 @@ impl EditorView {
                 theme.foreground,
             );
 
+            // Search match highlights
+            for (match_start_col, match_end_col, is_current) in
+                editor.search_highlights_for_line(i)
+            {
+                let match_x_start: f32 = if match_start_col == 0 {
+                    0.0
+                } else {
+                    let prefix: String = display.chars().take(match_start_col).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let match_x_end: f32 = {
+                    let prefix: String = display.chars().take(match_end_col).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let match_rect = Rect::from_min_size(
+                    egui::pos2(text_x + match_x_start, y),
+                    Vec2::new(match_x_end - match_x_start, line_height),
+                );
+                let color = if is_current {
+                    theme.search_current
+                } else {
+                    theme.search_match
+                };
+                painter.rect_filled(match_rect, 0.0, color);
+            }
+
             // Selection highlight (visual modes)
             if let Some((sel_start_col, sel_end_col)) = editor.visual_highlights_for_line(i) {
                 let sel_x_start: f32 = if sel_start_col == 0 {
