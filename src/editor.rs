@@ -810,4 +810,48 @@ mod tests {
         assert_eq!(editor.buffer.cursor_line(), 1);
         assert_eq!(editor.buffer.cursor_col(), 4); // indented to match line above
     }
+
+    #[test]
+    fn warning_for_unconfigured_language() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".py").unwrap();
+        std::fs::write(tmp.path(), "print('hello')").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        assert!(editor.syntax_state.is_none());
+        assert!(
+            editor.status_message.as_ref().unwrap().contains("python"),
+            "Expected warning mentioning 'python', got: {:?}",
+            editor.status_message
+        );
+    }
+
+    #[test]
+    fn no_warning_for_unknown_extension() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".xyz").unwrap();
+        std::fs::write(tmp.path(), "data").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &[]);
+        assert!(editor.syntax_state.is_none());
+        assert!(
+            editor.status_message.is_none(),
+            "Expected no warning for unknown extension, got: {:?}",
+            editor.status_message
+        );
+    }
+
+    #[test]
+    fn no_warning_for_configured_language() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
+        std::fs::write(tmp.path(), "fn main() {}").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        assert!(editor.syntax_state.is_some());
+        // Status message should be None (or a success message, not a warning)
+        let msg = editor.status_message.as_deref().unwrap_or("");
+        assert!(
+            !msg.contains("add"),
+            "Expected no 'add to config' warning, got: {:?}",
+            msg
+        );
+    }
 }
