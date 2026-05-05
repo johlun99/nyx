@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod highlighter;
+pub mod indent;
 pub mod languages;
 
 use tree_sitter::StreamingIterator as _;
