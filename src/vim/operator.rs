@@ -23,7 +23,9 @@ impl OperatorEngine {
                 self.clipboard = buffer.slice(line_start, line_start + line_char_len);
                 buffer.delete_range(line_start, line_start + line_char_len);
                 buffer.set_cursor(
-                    buffer.cursor_line().min(buffer.line_count().saturating_sub(1)),
+                    buffer
+                        .cursor_line()
+                        .min(buffer.line_count().saturating_sub(1)),
                     0,
                 );
             }

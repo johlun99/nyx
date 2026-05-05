@@ -12,15 +12,29 @@ pub struct TextBuffer {
 
 impl TextBuffer {
     pub fn new() -> Self {
-        Self { rope: Rope::new(), cursor_line: 0, cursor_col: 0, history: History::new() }
+        Self {
+            rope: Rope::new(),
+            cursor_line: 0,
+            cursor_col: 0,
+            history: History::new(),
+        }
     }
 
     pub fn from_text(text: &str) -> Self {
-        Self { rope: Rope::from_str(text), cursor_line: 0, cursor_col: 0, history: History::new() }
+        Self {
+            rope: Rope::from_str(text),
+            cursor_line: 0,
+            cursor_col: 0,
+            history: History::new(),
+        }
     }
 
-    pub fn cursor_line(&self) -> usize { self.cursor_line }
-    pub fn cursor_col(&self) -> usize { self.cursor_col }
+    pub fn cursor_line(&self) -> usize {
+        self.cursor_line
+    }
+    pub fn cursor_col(&self) -> usize {
+        self.cursor_col
+    }
 
     pub fn set_cursor(&mut self, line: usize, col: usize) {
         self.set_cursor_with_mode(line, col, false);
@@ -29,7 +43,11 @@ impl TextBuffer {
     pub fn set_cursor_with_mode(&mut self, line: usize, col: usize, allow_past_end: bool) {
         self.cursor_line = line.min(self.line_count().saturating_sub(1));
         let content_len = self.line_content_len(self.cursor_line);
-        let max_col = if allow_past_end { content_len } else { content_len.saturating_sub(1) };
+        let max_col = if allow_past_end {
+            content_len
+        } else {
+            content_len.saturating_sub(1)
+        };
         self.cursor_col = col.min(max_col);
     }
 
@@ -51,27 +69,39 @@ impl TextBuffer {
         self.cursor_col = offset - line_start;
     }
 
-    pub fn text(&self) -> String { self.rope.to_string() }
+    pub fn text(&self) -> String {
+        self.rope.to_string()
+    }
 
     pub fn slice(&self, start: usize, end: usize) -> String {
         self.rope.slice(start..end).to_string()
     }
 
-    pub fn line_count(&self) -> usize { self.rope.len_lines() }
+    pub fn line_count(&self) -> usize {
+        self.rope.len_lines()
+    }
 
-    pub fn line_slice(&self, idx: usize) -> RopeSlice<'_> { self.rope.line(idx) }
+    pub fn line_slice(&self, idx: usize) -> RopeSlice<'_> {
+        self.rope.line(idx)
+    }
 
     pub fn line_content_len(&self, line_idx: usize) -> usize {
         let line = self.rope.line(line_idx);
         let len = line.len_chars();
-        if len > 0 && line.char(len - 1) == '\n' { len - 1 } else { len }
+        if len > 0 && line.char(len - 1) == '\n' {
+            len - 1
+        } else {
+            len
+        }
     }
 
     pub fn line_len_chars(&self, line_idx: usize) -> usize {
         self.rope.line(line_idx).len_chars()
     }
 
-    pub fn len_chars(&self) -> usize { self.rope.len_chars() }
+    pub fn len_chars(&self) -> usize {
+        self.rope.len_chars()
+    }
 
     pub fn line_to_char(&self, line_idx: usize) -> usize {
         self.rope.line_to_char(line_idx)

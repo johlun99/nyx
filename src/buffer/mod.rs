@@ -1,4 +1,4 @@
-mod text_buffer;
 pub(crate) mod history;
+mod text_buffer;
 
 pub use text_buffer::TextBuffer;

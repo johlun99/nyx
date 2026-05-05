@@ -1,9 +1,9 @@
 // src/renderer/editor_view.rs
-use eframe::egui::{self, Rect, Sense, Vec2};
 use crate::buffer::TextBuffer;
-use crate::renderer::theme::Theme;
 use crate::renderer::status_bar::StatusBar;
+use crate::renderer::theme::Theme;
 use crate::vim::mode::Mode;
+use eframe::egui::{self, Rect, Sense, Vec2};
 
 pub struct EditorView {
     pub scroll_offset: usize,
@@ -14,6 +14,7 @@ impl EditorView {
         Self { scroll_offset: 0 }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
@@ -41,8 +42,15 @@ impl EditorView {
 
         // Status bar at bottom
         let status_height = StatusBar::render(
-            &painter, rect, theme, &font_id, line_height,
-            mode, file_path, command_input, status_message,
+            &painter,
+            rect,
+            theme,
+            &font_id,
+            line_height,
+            mode,
+            file_path,
+            command_input,
+            status_message,
         );
 
         let editor_height = available.y - status_height;
@@ -111,7 +119,7 @@ impl EditorView {
                             painter.text(
                                 egui::pos2(text_x + cursor_x, y),
                                 egui::Align2::LEFT_TOP,
-                                &ch.to_string(),
+                                ch.to_string(),
                                 font_id.clone(),
                                 theme.background,
                             );

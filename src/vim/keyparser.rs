@@ -34,12 +34,11 @@ impl KeyParser {
     }
 
     pub fn handle_key(&mut self, ch: char) -> VimAction {
-        let action = match self.mode {
+        match self.mode {
             Mode::Normal => self.handle_normal(ch),
             Mode::Insert => self.handle_insert(ch),
             Mode::Command => VimAction::Noop, // command input handled separately
-        };
-        action
+        }
     }
 
     pub fn handle_escape(&mut self) -> VimAction {
@@ -266,25 +265,49 @@ mod tests {
     #[test]
     fn normal_mode_word_motions() {
         let mut parser = KeyParser::new();
-        assert_eq!(parser.handle_key('w'), VimAction::Motion(MotionKind::WordForward));
-        assert_eq!(parser.handle_key('b'), VimAction::Motion(MotionKind::WordBackward));
-        assert_eq!(parser.handle_key('e'), VimAction::Motion(MotionKind::WordEnd));
+        assert_eq!(
+            parser.handle_key('w'),
+            VimAction::Motion(MotionKind::WordForward)
+        );
+        assert_eq!(
+            parser.handle_key('b'),
+            VimAction::Motion(MotionKind::WordBackward)
+        );
+        assert_eq!(
+            parser.handle_key('e'),
+            VimAction::Motion(MotionKind::WordEnd)
+        );
     }
 
     #[test]
     fn normal_mode_line_motions() {
         let mut parser = KeyParser::new();
-        assert_eq!(parser.handle_key('0'), VimAction::Motion(MotionKind::LineStart));
-        assert_eq!(parser.handle_key('$'), VimAction::Motion(MotionKind::LineEnd));
-        assert_eq!(parser.handle_key('^'), VimAction::Motion(MotionKind::FirstNonBlank));
+        assert_eq!(
+            parser.handle_key('0'),
+            VimAction::Motion(MotionKind::LineStart)
+        );
+        assert_eq!(
+            parser.handle_key('$'),
+            VimAction::Motion(MotionKind::LineEnd)
+        );
+        assert_eq!(
+            parser.handle_key('^'),
+            VimAction::Motion(MotionKind::FirstNonBlank)
+        );
     }
 
     #[test]
     fn normal_mode_gg_and_big_g() {
         let mut parser = KeyParser::new();
         assert_eq!(parser.handle_key('g'), VimAction::Noop);
-        assert_eq!(parser.handle_key('g'), VimAction::Motion(MotionKind::FileTop));
-        assert_eq!(parser.handle_key('G'), VimAction::Motion(MotionKind::FileBottom));
+        assert_eq!(
+            parser.handle_key('g'),
+            VimAction::Motion(MotionKind::FileTop)
+        );
+        assert_eq!(
+            parser.handle_key('G'),
+            VimAction::Motion(MotionKind::FileBottom)
+        );
     }
 
     #[test]
@@ -335,7 +358,7 @@ mod tests {
         let mut parser = KeyParser::new();
         assert_eq!(parser.handle_key('d'), VimAction::Noop); // pending 'd'
         assert_eq!(parser.handle_key('z'), VimAction::Noop); // unrecognized, clears pending
-        // Parser should be ready for new input
+                                                             // Parser should be ready for new input
         assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
     }
 

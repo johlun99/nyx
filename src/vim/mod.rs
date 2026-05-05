@@ -1,10 +1,10 @@
 pub mod action;
-pub mod mode;
+pub mod command;
 mod keyparser;
+pub mod mode;
 pub(crate) mod motion;
 pub(crate) mod operator;
-pub mod command;
 
 pub use action::*;
-pub use mode::Mode;
 pub use keyparser::KeyParser;
+pub use mode::Mode;

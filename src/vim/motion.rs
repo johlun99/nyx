@@ -26,7 +26,8 @@ pub fn execute_motion(buffer: &mut TextBuffer, motion: &MotionKind) {
         }
         MotionKind::FirstNonBlank => {
             let line = buffer.line_slice(buffer.cursor_line()).to_string();
-            let col = line.chars()
+            let col = line
+                .chars()
                 .take_while(|c| c.is_whitespace() && *c != '\n')
                 .count();
             buffer.set_cursor(buffer.cursor_line(), col);
@@ -56,7 +57,8 @@ pub fn execute_motion(buffer: &mut TextBuffer, motion: &MotionKind) {
 
 fn word_forward(buffer: &mut TextBuffer) {
     let content_len = buffer.line_content_len(buffer.cursor_line());
-    let content: Vec<char> = buffer.line_slice(buffer.cursor_line())
+    let content: Vec<char> = buffer
+        .line_slice(buffer.cursor_line())
         .chars()
         .take(content_len)
         .collect();
@@ -79,7 +81,10 @@ fn word_forward(buffer: &mut TextBuffer) {
     if col >= content.len() && buffer.cursor_line() < buffer.line_count().saturating_sub(1) {
         buffer.set_cursor(buffer.cursor_line() + 1, 0);
     } else {
-        buffer.set_cursor(buffer.cursor_line(), col.min(content.len().saturating_sub(1)));
+        buffer.set_cursor(
+            buffer.cursor_line(),
+            col.min(content.len().saturating_sub(1)),
+        );
     }
 }
 
@@ -96,7 +101,8 @@ fn word_backward(buffer: &mut TextBuffer) {
     }
 
     let content_len = buffer.line_content_len(buffer.cursor_line());
-    let content: Vec<char> = buffer.line_slice(buffer.cursor_line())
+    let content: Vec<char> = buffer
+        .line_slice(buffer.cursor_line())
         .chars()
         .take(content_len)
         .collect();
@@ -121,7 +127,8 @@ fn word_backward(buffer: &mut TextBuffer) {
 
 fn word_end(buffer: &mut TextBuffer) {
     let content_len = buffer.line_content_len(buffer.cursor_line());
-    let content: Vec<char> = buffer.line_slice(buffer.cursor_line())
+    let content: Vec<char> = buffer
+        .line_slice(buffer.cursor_line())
         .chars()
         .take(content_len)
         .collect();

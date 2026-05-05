@@ -1,9 +1,9 @@
 // src/app.rs
-use eframe::egui;
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::renderer::{EditorView, Theme};
 use crate::vim::Mode;
+use eframe::egui;
 
 pub struct NyxApp {
     editor: Editor,

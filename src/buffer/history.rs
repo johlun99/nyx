@@ -196,9 +196,18 @@ mod tests {
     fn group_undo_is_atomic() {
         let mut hist = History::new();
         hist.begin_group();
-        hist.push(EditAction::Insert { offset: 0, text: "a".into() });
-        hist.push(EditAction::Insert { offset: 1, text: "b".into() });
-        hist.push(EditAction::Insert { offset: 2, text: "c".into() });
+        hist.push(EditAction::Insert {
+            offset: 0,
+            text: "a".into(),
+        });
+        hist.push(EditAction::Insert {
+            offset: 1,
+            text: "b".into(),
+        });
+        hist.push(EditAction::Insert {
+            offset: 2,
+            text: "c".into(),
+        });
         hist.end_group();
 
         // Single undo should remove the entire group

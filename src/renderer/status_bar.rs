@@ -1,12 +1,13 @@
 // src/renderer/status_bar.rs
-use eframe::egui;
 use crate::renderer::theme::Theme;
 use crate::vim::mode::Mode;
+use eframe::egui;
 
 pub struct StatusBar;
 
 impl StatusBar {
     /// Renders the status bar at the bottom. Returns the height consumed.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         painter: &egui::Painter,
         rect: egui::Rect,
