@@ -1,10 +1,14 @@
+use crate::vim::action::SearchDirection;
 use crate::vim::action::*;
 use crate::vim::mode::Mode;
+use crate::vim::text_object::{TextObject, TextObjectKind};
 
 pub struct KeyParser {
     mode: Mode,
     pending: String,
     count: Option<usize>,
+    pending_register: Option<char>,
+    awaiting_register: bool,
 }
 
 // Note: Visual, Visual-Line, and Visual-Block modes are planned for Phase 2.
@@ -16,6 +20,8 @@ impl KeyParser {
             mode: Mode::Normal,
             pending: String::new(),
             count: None,
+            pending_register: None,
+            awaiting_register: false,
         }
     }
 
@@ -28,7 +34,11 @@ impl KeyParser {
         self.count.take().unwrap_or(1)
     }
 
-    #[cfg(test)]
+    /// Returns the pending register selection, consuming it.
+    pub fn take_register(&mut self) -> Option<char> {
+        self.pending_register.take()
+    }
+
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
     }
@@ -38,12 +48,15 @@ impl KeyParser {
             Mode::Normal => self.handle_normal(ch),
             Mode::Insert => self.handle_insert(ch),
             Mode::Command => VimAction::Noop, // command input handled separately
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock => self.handle_visual(ch),
         }
     }
 
     pub fn handle_escape(&mut self) -> VimAction {
         self.pending.clear();
         self.count = None;
+        self.pending_register = None;
+        self.awaiting_register = false;
         self.mode = Mode::Normal;
         VimAction::SwitchMode(Mode::Normal)
     }
@@ -63,6 +76,20 @@ impl KeyParser {
     }
 
     fn handle_normal(&mut self, ch: char) -> VimAction {
+        // Register prefix: " followed by a-z or +
+        if self.awaiting_register {
+            self.awaiting_register = false;
+            match ch {
+                'a'..='z' | '+' => {
+                    self.pending_register = Some(ch);
+                    return VimAction::Noop;
+                }
+                _ => {
+                    return VimAction::Noop;
+                }
+            }
+        }
+
         // Count prefix: digits 1-9 start a count, 0 after digits continues count.
         // Uses saturating arithmetic and caps at 99999 to prevent overflow.
         if ch.is_ascii_digit() && (ch != '0' || self.count.is_some()) {
@@ -75,6 +102,45 @@ impl KeyParser {
         // Pending multi-char sequences
         if !self.pending.is_empty() {
             let combined = format!("{}{}", self.pending, ch);
+
+            // 3-char text object sequences: operator + i/a + object kind
+            // Intercept "di", "da", "ci", "ca", "yi", "ya" to wait for one more char.
+            if combined.len() == 2 {
+                let first = combined.chars().next().unwrap();
+                if (first == 'd' || first == 'c' || first == 'y') && (ch == 'i' || ch == 'a') {
+                    self.pending = combined;
+                    return VimAction::Noop;
+                }
+            }
+
+            if combined.len() == 3 {
+                // Text object: e.g. "diw", "ci\"", "ya("
+                let mut chars_iter = combined.chars();
+                let op = chars_iter.next().unwrap();
+                let scope = chars_iter.next().unwrap();
+                let kind_ch = chars_iter.next().unwrap();
+
+                self.pending.clear();
+
+                if let Some(kind) = Self::char_to_text_object_kind(kind_ch) {
+                    let text_obj = match scope {
+                        'i' => TextObject::Inner(kind),
+                        'a' => TextObject::Around(kind),
+                        _ => return VimAction::Noop,
+                    };
+                    return match op {
+                        'd' => VimAction::Operator(OperatorAction::DeleteTextObject(text_obj)),
+                        'c' => {
+                            self.mode = Mode::Insert;
+                            VimAction::Operator(OperatorAction::ChangeTextObject(text_obj))
+                        }
+                        'y' => VimAction::Operator(OperatorAction::YankTextObject(text_obj)),
+                        _ => VimAction::Noop,
+                    };
+                }
+                return VimAction::Noop;
+            }
+
             self.pending.clear();
             return match combined.as_str() {
                 "gg" => VimAction::Motion(MotionKind::FileTop),
@@ -161,10 +227,109 @@ impl KeyParser {
                 VimAction::EnterInsert(InsertEntry::NewLineAbove)
             }
 
+            // Visual mode entry
+            'v' => {
+                self.mode = Mode::Visual;
+                VimAction::EnterVisual(VisualKind::Char)
+            }
+            'V' => {
+                self.mode = Mode::VisualLine;
+                VimAction::EnterVisual(VisualKind::Line)
+            }
+
             // Command mode
             ':' => {
                 self.mode = Mode::Command;
                 VimAction::SwitchMode(Mode::Command)
+            }
+
+            // Register prefix
+            '"' => {
+                self.awaiting_register = true;
+                VimAction::Noop
+            }
+
+            // Dot-repeat
+            '.' => VimAction::DotRepeat,
+
+            // Search
+            '/' => VimAction::EnterSearch(SearchDirection::Forward),
+            '?' => VimAction::EnterSearch(SearchDirection::Backward),
+            'n' => VimAction::SearchNext,
+            'N' => VimAction::SearchPrev,
+
+            _ => VimAction::Noop,
+        }
+    }
+
+    fn handle_visual(&mut self, ch: char) -> VimAction {
+        // Handle pending sequences (e.g. gg)
+        if !self.pending.is_empty() {
+            let combined = format!("{}{}", self.pending, ch);
+            self.pending.clear();
+            return match combined.as_str() {
+                "gg" => VimAction::Motion(MotionKind::FileTop),
+                _ => VimAction::Noop,
+            };
+        }
+
+        match ch {
+            // Motions work in visual mode (move cursor, selection follows)
+            'h' => VimAction::Motion(MotionKind::Left),
+            'j' => VimAction::Motion(MotionKind::Down),
+            'k' => VimAction::Motion(MotionKind::Up),
+            'l' => VimAction::Motion(MotionKind::Right),
+            '0' => VimAction::Motion(MotionKind::LineStart),
+            '^' => VimAction::Motion(MotionKind::FirstNonBlank),
+            '$' => VimAction::Motion(MotionKind::LineEnd),
+            'w' => VimAction::Motion(MotionKind::WordForward),
+            'b' => VimAction::Motion(MotionKind::WordBackward),
+            'e' => VimAction::Motion(MotionKind::WordEnd),
+            'G' => VimAction::Motion(MotionKind::FileBottom),
+            'g' => {
+                self.pending.push(ch);
+                VimAction::Noop
+            }
+
+            // Operators on selection
+            'd' => {
+                self.mode = Mode::Normal;
+                VimAction::VisualOperator(VisualOperatorAction::Delete)
+            }
+            'c' => {
+                self.mode = Mode::Insert;
+                VimAction::VisualOperator(VisualOperatorAction::Change)
+            }
+            'y' => {
+                self.mode = Mode::Normal;
+                VimAction::VisualOperator(VisualOperatorAction::Yank)
+            }
+            'x' => {
+                self.mode = Mode::Normal;
+                VimAction::VisualOperator(VisualOperatorAction::Delete)
+            }
+
+            // Swap anchor/cursor
+            'o' => VimAction::SwapVisualAnchor,
+
+            // Switch between visual sub-modes
+            'v' => {
+                if self.mode == Mode::Visual {
+                    self.mode = Mode::Normal;
+                    VimAction::SwitchMode(Mode::Normal)
+                } else {
+                    self.mode = Mode::Visual;
+                    VimAction::SwitchMode(Mode::Visual)
+                }
+            }
+            'V' => {
+                if self.mode == Mode::VisualLine {
+                    self.mode = Mode::Normal;
+                    VimAction::SwitchMode(Mode::Normal)
+                } else {
+                    self.mode = Mode::VisualLine;
+                    VimAction::SwitchMode(Mode::VisualLine)
+                }
             }
 
             _ => VimAction::Noop,
@@ -191,11 +356,26 @@ impl KeyParser {
             _ => None,
         }
     }
+
+    fn char_to_text_object_kind(ch: char) -> Option<TextObjectKind> {
+        match ch {
+            'w' => Some(TextObjectKind::Word),
+            'W' => Some(TextObjectKind::BigWord),
+            '"' => Some(TextObjectKind::DoubleQuote),
+            '\'' => Some(TextObjectKind::SingleQuote),
+            '(' | ')' => Some(TextObjectKind::Paren),
+            '[' | ']' => Some(TextObjectKind::Bracket),
+            '{' | '}' => Some(TextObjectKind::Brace),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vim::action::SearchDirection;
+    use crate::vim::text_object::{TextObject, TextObjectKind};
 
     #[test]
     fn normal_mode_i_enters_insert() {
@@ -371,5 +551,208 @@ mod tests {
         assert_eq!(parser.take_count(), 5);
         // Second take_count returns default 1
         assert_eq!(parser.take_count(), 1);
+    }
+
+    #[test]
+    fn register_prefix_sets_register() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('"'), VimAction::Noop);
+        assert_eq!(parser.handle_key('a'), VimAction::Noop);
+        assert_eq!(parser.take_register(), Some('a'));
+    }
+
+    #[test]
+    fn register_prefix_plus() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('"');
+        parser.handle_key('+');
+        assert_eq!(parser.take_register(), Some('+'));
+    }
+
+    #[test]
+    fn register_consumed_after_take() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('"');
+        parser.handle_key('a');
+        assert_eq!(parser.take_register(), Some('a'));
+        assert_eq!(parser.take_register(), None);
+    }
+
+    #[test]
+    fn register_prefix_then_operator() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('"');
+        parser.handle_key('a');
+        let action = parser.handle_key('p');
+        assert_eq!(action, VimAction::Paste);
+        assert_eq!(parser.take_register(), Some('a'));
+    }
+
+    #[test]
+    fn text_object_diw() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('d'), VimAction::Noop);
+        assert_eq!(parser.handle_key('i'), VimAction::Noop);
+        assert_eq!(
+            parser.handle_key('w'),
+            VimAction::Operator(OperatorAction::DeleteTextObject(TextObject::Inner(
+                TextObjectKind::Word
+            )))
+        );
+    }
+
+    #[test]
+    fn text_object_ci_double_quote() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('c');
+        parser.handle_key('i');
+        let action = parser.handle_key('"');
+        assert_eq!(
+            action,
+            VimAction::Operator(OperatorAction::ChangeTextObject(TextObject::Inner(
+                TextObjectKind::DoubleQuote
+            )))
+        );
+        assert_eq!(parser.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn text_object_ya_paren() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('y');
+        parser.handle_key('a');
+        let action = parser.handle_key('(');
+        assert_eq!(
+            action,
+            VimAction::Operator(OperatorAction::YankTextObject(TextObject::Around(
+                TextObjectKind::Paren
+            )))
+        );
+    }
+
+    #[test]
+    fn text_object_invalid_resets() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('d');
+        parser.handle_key('i');
+        assert_eq!(parser.handle_key('z'), VimAction::Noop); // invalid object
+                                                             // Parser should be clean
+        assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
+    }
+
+    #[test]
+    fn v_enters_visual_mode() {
+        let mut parser = KeyParser::new();
+        let action = parser.handle_key('v');
+        assert_eq!(action, VimAction::EnterVisual(VisualKind::Char));
+        assert_eq!(parser.mode(), Mode::Visual);
+    }
+
+    #[test]
+    fn visual_v_enters_visual_line() {
+        let mut parser = KeyParser::new();
+        let action = parser.handle_key('V');
+        assert_eq!(action, VimAction::EnterVisual(VisualKind::Line));
+        assert_eq!(parser.mode(), Mode::VisualLine);
+    }
+
+    #[test]
+    fn visual_mode_d_deletes_selection() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_key('d');
+        assert_eq!(
+            action,
+            VimAction::VisualOperator(VisualOperatorAction::Delete)
+        );
+        assert_eq!(parser.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn visual_mode_y_yanks_selection() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_key('y');
+        assert_eq!(
+            action,
+            VimAction::VisualOperator(VisualOperatorAction::Yank)
+        );
+        assert_eq!(parser.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn visual_mode_c_changes_selection() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_key('c');
+        assert_eq!(
+            action,
+            VimAction::VisualOperator(VisualOperatorAction::Change)
+        );
+        assert_eq!(parser.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn visual_mode_o_swaps_anchor() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_key('o');
+        assert_eq!(action, VimAction::SwapVisualAnchor);
+    }
+
+    #[test]
+    fn visual_mode_escape_returns_normal() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        let action = parser.handle_escape();
+        assert_eq!(action, VimAction::SwitchMode(Mode::Normal));
+        assert_eq!(parser.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn visual_mode_motions_work() {
+        let mut parser = KeyParser::new();
+        parser.handle_key('v');
+        assert_eq!(parser.handle_key('j'), VimAction::Motion(MotionKind::Down));
+        assert_eq!(
+            parser.handle_key('w'),
+            VimAction::Motion(MotionKind::WordForward)
+        );
+    }
+
+    #[test]
+    fn dot_emits_dot_repeat() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('.'), VimAction::DotRepeat);
+    }
+
+    #[test]
+    fn forward_search_key() {
+        let mut parser = KeyParser::new();
+        assert_eq!(
+            parser.handle_key('/'),
+            VimAction::EnterSearch(SearchDirection::Forward)
+        );
+    }
+
+    #[test]
+    fn backward_search_key() {
+        let mut parser = KeyParser::new();
+        assert_eq!(
+            parser.handle_key('?'),
+            VimAction::EnterSearch(SearchDirection::Backward)
+        );
+    }
+
+    #[test]
+    fn search_next_key() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('n'), VimAction::SearchNext);
+    }
+
+    #[test]
+    fn search_prev_key() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('N'), VimAction::SearchPrev);
     }
 }

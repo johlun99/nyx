@@ -2,7 +2,7 @@
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::renderer::{EditorView, Theme};
-use crate::vim::Mode;
+use crate::vim::{Mode, VimAction, VisualKind};
 use eframe::egui;
 
 pub struct NyxApp {
@@ -52,6 +52,34 @@ impl NyxApp {
                 return;
             }
 
+            // Search input mode
+            if self.editor.search_input.is_some() {
+                if input.key_pressed(egui::Key::Enter) {
+                    self.editor.execute_search();
+                    return;
+                }
+                if input.key_pressed(egui::Key::Escape)
+                    || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
+                {
+                    self.editor.search_input = None;
+                    let action = self.editor.key_parser.handle_escape();
+                    self.editor.apply_action(action);
+                    return;
+                }
+                if input.key_pressed(egui::Key::Backspace) {
+                    self.editor.handle_search_backspace();
+                    return;
+                }
+                for event in &input.events {
+                    if let egui::Event::Text(text) = event {
+                        for ch in text.chars() {
+                            self.editor.handle_search_char(ch);
+                        }
+                    }
+                }
+                return;
+            }
+
             // Escape and Ctrl+[ (both exit to Normal mode)
             if input.key_pressed(egui::Key::Escape)
                 || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
@@ -67,6 +95,17 @@ impl NyxApp {
                 && input.key_pressed(egui::Key::R)
             {
                 let action = self.editor.key_parser.handle_ctrl_r();
+                self.editor.apply_action(action);
+                return;
+            }
+
+            // Ctrl+V for visual block mode — only in Normal mode
+            if self.editor.mode() == Mode::Normal
+                && input.modifiers.ctrl
+                && input.key_pressed(egui::Key::V)
+            {
+                self.editor.key_parser.set_mode(Mode::VisualBlock);
+                let action = VimAction::EnterVisual(VisualKind::Block);
                 self.editor.apply_action(action);
                 return;
             }
@@ -115,16 +154,11 @@ impl eframe::App for NyxApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
-                let command_input = self.editor.command_input();
                 self.editor_view.render(
                     ui,
-                    &self.editor.buffer,
+                    &self.editor,
                     &self.theme,
-                    self.editor.mode(),
                     self.config.editor.font_size,
-                    self.editor.file_path.as_deref(),
-                    command_input,
-                    self.editor.status_message.as_deref(),
                 );
             });
     }

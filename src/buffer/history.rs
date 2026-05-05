@@ -57,11 +57,15 @@ impl History {
 
     /// Close the current undo group and push it as a single UndoEntry.
     /// Used when leaving Insert mode (Escape).
-    pub fn end_group(&mut self) {
+    /// Returns `true` if a group was open (i.e., we were in Insert mode), `false` otherwise.
+    pub fn end_group(&mut self) -> bool {
         if let Some(actions) = self.current_group.take() {
             if !actions.is_empty() {
                 self.push_entry(UndoEntry::Group(actions));
             }
+            true
+        } else {
+            false
         }
     }
 

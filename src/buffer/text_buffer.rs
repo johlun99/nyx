@@ -179,8 +179,9 @@ impl TextBuffer {
     }
 
     /// End the current undo group. Call when leaving Insert mode (Escape).
-    pub fn end_undo_group(&mut self) {
-        self.history.end_group();
+    /// Returns `true` if a group was open (i.e., we were in Insert mode), `false` otherwise.
+    pub fn end_undo_group(&mut self) -> bool {
+        self.history.end_group()
     }
 
     fn replay_action_undo(&mut self, action: &EditAction) {

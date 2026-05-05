@@ -1,9 +1,24 @@
 // src/editor.rs
 use crate::buffer::TextBuffer;
+use crate::vim::action::SearchDirection;
 use crate::vim::command::{CommandParser, CommandResult};
 use crate::vim::motion::execute_motion;
 use crate::vim::operator::OperatorEngine;
-use crate::vim::{InsertEntry, KeyParser, Mode, VimAction};
+use crate::vim::search::SearchState;
+use crate::vim::{InsertEntry, KeyParser, Mode, VimAction, VisualOperatorAction};
+
+#[derive(Debug, Clone)]
+pub struct LastAction {
+    pub entry: Option<InsertEntry>,
+    pub actions: Vec<VimAction>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VisualAnchor {
+    pub line: usize,
+    pub col: usize,
+}
 
 pub struct Editor {
     pub buffer: TextBuffer,
@@ -13,6 +28,12 @@ pub struct Editor {
     pub should_quit: bool,
     pub status_message: Option<String>,
     pub command_parser: CommandParser,
+    pub visual_anchor: Option<VisualAnchor>,
+    pub last_action: Option<LastAction>,
+    pub search_state: SearchState,
+    pub search_input: Option<String>,
+    recording_action: Option<LastAction>,
+    replaying: bool,
 }
 
 impl Editor {
@@ -39,6 +60,12 @@ impl Editor {
             should_quit: false,
             status_message: None,
             command_parser: CommandParser::new(),
+            visual_anchor: None,
+            last_action: None,
+            search_state: SearchState::new(),
+            search_input: None,
+            recording_action: None,
+            replaying: false,
         }
     }
 
@@ -50,15 +77,67 @@ impl Editor {
         if action == VimAction::Noop {
             return;
         }
+
+        // Invalidate search cache on edits
+        match &action {
+            VimAction::InsertChar(_)
+            | VimAction::DeleteCharBefore
+            | VimAction::Operator(_)
+            | VimAction::VisualOperator(_)
+            | VimAction::Paste
+            | VimAction::Undo
+            | VimAction::Redo => {
+                self.search_state.matches.clear();
+            }
+            _ => {}
+        }
+
         self.status_message = None;
 
         let count = self.key_parser.take_count();
+        let register = self.key_parser.take_register();
+
+        // Record for dot-repeat (skip during replay)
+        if !self.replaying {
+            match &action {
+                VimAction::Operator(_) | VimAction::VisualOperator(_) => {
+                    self.last_action = Some(LastAction {
+                        entry: None,
+                        actions: vec![action.clone()],
+                        count,
+                    });
+                    self.recording_action = None;
+                }
+                VimAction::EnterInsert(entry) => {
+                    self.recording_action = Some(LastAction {
+                        entry: Some(entry.clone()),
+                        actions: vec![],
+                        count: 1,
+                    });
+                }
+                VimAction::InsertChar(_) | VimAction::DeleteCharBefore => {
+                    if let Some(ref mut rec) = self.recording_action {
+                        rec.actions.push(action.clone());
+                    }
+                }
+                VimAction::SwitchMode(Mode::Normal) => {
+                    if let Some(rec) = self.recording_action.take() {
+                        self.last_action = Some(rec);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         match action {
             VimAction::SwitchMode(Mode::Normal) => {
-                self.buffer.end_undo_group();
-                let col = self.buffer.cursor_col();
-                if col > 0 {
-                    self.buffer.set_cursor(self.buffer.cursor_line(), col - 1);
+                self.visual_anchor = None;
+                let was_insert = self.buffer.end_undo_group();
+                if was_insert {
+                    let col = self.buffer.cursor_col();
+                    if col > 0 {
+                        self.buffer.set_cursor(self.buffer.cursor_line(), col - 1);
+                    }
                 }
                 self.buffer.clamp_cursor_normal();
             }
@@ -90,19 +169,229 @@ impl Editor {
             }
             VimAction::Operator(ref op_action) => {
                 for _ in 0..count {
-                    self.operator_engine.execute(&mut self.buffer, op_action);
+                    self.operator_engine
+                        .execute(&mut self.buffer, op_action, register);
                 }
             }
             VimAction::Yank(ref motion) => {
-                self.operator_engine.yank_motion(&mut self.buffer, motion);
+                self.operator_engine
+                    .yank_motion(&mut self.buffer, motion, register);
             }
             VimAction::Paste => {
                 for _ in 0..count {
-                    self.operator_engine.paste(&mut self.buffer);
+                    self.operator_engine.paste(&mut self.buffer, register);
+                }
+            }
+            VimAction::EnterVisual(ref _kind) => {
+                self.visual_anchor = Some(VisualAnchor {
+                    line: self.buffer.cursor_line(),
+                    col: self.buffer.cursor_col(),
+                });
+            }
+            VimAction::VisualOperator(ref vis_op) => {
+                if let Some((start, end)) = self.visual_selection_range() {
+                    let content = self.buffer.slice(start, end);
+                    let was_visual_line = content.ends_with('\n');
+
+                    match vis_op {
+                        VisualOperatorAction::Delete => {
+                            self.operator_engine
+                                .registers
+                                .set(register, content, was_visual_line);
+                            self.buffer.delete_range(start, end);
+                            self.buffer.update_cursor_from_offset(start);
+                            self.buffer.clamp_cursor_normal();
+                        }
+                        VisualOperatorAction::Change => {
+                            self.operator_engine
+                                .registers
+                                .set(register, content, was_visual_line);
+                            self.buffer.delete_range(start, end);
+                            self.buffer.update_cursor_from_offset(start);
+                            self.buffer.begin_undo_group();
+                        }
+                        VisualOperatorAction::Yank => {
+                            self.operator_engine
+                                .registers
+                                .set(register, content, was_visual_line);
+                            self.buffer.update_cursor_from_offset(start);
+                            self.buffer.clamp_cursor_normal();
+                        }
+                    }
+                }
+                self.visual_anchor = None;
+            }
+            VimAction::SwapVisualAnchor => {
+                if let Some(ref mut anchor) = self.visual_anchor {
+                    let old_anchor_line = anchor.line;
+                    let old_anchor_col = anchor.col;
+                    anchor.line = self.buffer.cursor_line();
+                    anchor.col = self.buffer.cursor_col();
+                    self.buffer.set_cursor(old_anchor_line, old_anchor_col);
+                }
+            }
+            VimAction::DotRepeat => {
+                if let Some(ref last) = self.last_action.clone() {
+                    self.replaying = true;
+                    let repeat_count = if count > 1 { count } else { last.count };
+
+                    if let Some(ref entry) = last.entry.clone() {
+                        // Insert session replay
+                        for _ in 0..repeat_count {
+                            self.apply_action(VimAction::EnterInsert(entry.clone()));
+                            for a in last.actions.clone() {
+                                self.apply_action(a);
+                            }
+                            self.apply_action(VimAction::SwitchMode(Mode::Normal));
+                        }
+                    } else {
+                        // Operator replay
+                        for a in last.actions.clone() {
+                            for _ in 0..repeat_count {
+                                self.apply_action(a.clone());
+                            }
+                        }
+                    }
+                    self.replaying = false;
+                }
+            }
+            VimAction::EnterSearch(ref direction) => {
+                self.start_search(direction.clone());
+            }
+            VimAction::SearchNext => {
+                if !self.search_state.pattern.is_empty() {
+                    if self.search_state.matches.is_empty() {
+                        self.search_state.find_matches(&self.buffer.text());
+                    }
+                    let cursor = self.buffer.cursor_offset();
+                    if let Some(offset) = self.search_state.next_match(cursor) {
+                        self.buffer.update_cursor_from_offset(offset);
+                        let total = self.search_state.match_count();
+                        let current = self.search_state.current_match_index().unwrap_or(0) + 1;
+                        self.status_message = Some(format!("[{}/{}]", current, total));
+                    }
+                }
+            }
+            VimAction::SearchPrev => {
+                if !self.search_state.pattern.is_empty() {
+                    if self.search_state.matches.is_empty() {
+                        self.search_state.find_matches(&self.buffer.text());
+                    }
+                    let cursor = self.buffer.cursor_offset();
+                    if let Some(offset) = self.search_state.prev_match(cursor) {
+                        self.buffer.update_cursor_from_offset(offset);
+                        let total = self.search_state.match_count();
+                        let current = self.search_state.current_match_index().unwrap_or(0) + 1;
+                        self.status_message = Some(format!("[{}/{}]", current, total));
+                    }
                 }
             }
             VimAction::Noop => unreachable!(),
         }
+    }
+
+    /// Returns the char range [start, end) of the visual selection.
+    pub fn visual_selection_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.visual_anchor?;
+        let anchor_offset = self.buffer.line_to_char(anchor.line) + anchor.col;
+        let cursor_offset = self.buffer.cursor_offset();
+
+        match self.mode() {
+            Mode::Visual => {
+                let start = anchor_offset.min(cursor_offset);
+                let end = anchor_offset.max(cursor_offset) + 1; // inclusive
+                Some((start, end.min(self.buffer.len_chars())))
+            }
+            Mode::VisualLine => {
+                let start_line = anchor.line.min(self.buffer.cursor_line());
+                let end_line = anchor.line.max(self.buffer.cursor_line());
+                let start = self.buffer.line_to_char(start_line);
+                let end = if end_line + 1 < self.buffer.line_count() {
+                    self.buffer.line_to_char(end_line + 1)
+                } else {
+                    self.buffer.len_chars()
+                };
+                Some((start, end))
+            }
+            Mode::VisualBlock => {
+                // For block mode, return bounding line range for highlighting
+                let start_line = anchor.line.min(self.buffer.cursor_line());
+                let end_line = anchor.line.max(self.buffer.cursor_line());
+                let start = self.buffer.line_to_char(start_line);
+                let end = if end_line + 1 < self.buffer.line_count() {
+                    self.buffer.line_to_char(end_line + 1)
+                } else {
+                    self.buffer.len_chars()
+                };
+                Some((start, end))
+            }
+            _ => None,
+        }
+    }
+
+    /// Get visual highlight ranges for the renderer.
+    /// Returns (start_col, end_col) for highlighting on a given line.
+    pub fn visual_highlights_for_line(&self, line_idx: usize) -> Option<(usize, usize)> {
+        let anchor = self.visual_anchor?;
+        match self.mode() {
+            Mode::Visual => {
+                let anchor_offset = self.buffer.line_to_char(anchor.line) + anchor.col;
+                let cursor_offset = self.buffer.cursor_offset();
+                let sel_start = anchor_offset.min(cursor_offset);
+                let sel_end = anchor_offset.max(cursor_offset) + 1;
+
+                let line_start = self.buffer.line_to_char(line_idx);
+                let line_end = line_start + self.buffer.line_len_chars(line_idx);
+
+                if sel_end <= line_start || sel_start >= line_end {
+                    return None; // No overlap
+                }
+
+                let col_start = sel_start.saturating_sub(line_start);
+                let col_end = if sel_end < line_end {
+                    sel_end - line_start
+                } else {
+                    self.buffer.line_content_len(line_idx)
+                };
+
+                Some((col_start, col_end))
+            }
+            Mode::VisualLine => {
+                let start_line = anchor.line.min(self.buffer.cursor_line());
+                let end_line = anchor.line.max(self.buffer.cursor_line());
+                if line_idx >= start_line && line_idx <= end_line {
+                    Some((0, self.buffer.line_content_len(line_idx)))
+                } else {
+                    None
+                }
+            }
+            Mode::VisualBlock => {
+                let start_line = anchor.line.min(self.buffer.cursor_line());
+                let end_line = anchor.line.max(self.buffer.cursor_line());
+                if line_idx >= start_line && line_idx <= end_line {
+                    let start_col = anchor.col.min(self.buffer.cursor_col());
+                    let end_col = anchor.col.max(self.buffer.cursor_col()) + 1;
+                    Some((start_col, end_col))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns (start_line, end_line, start_col, end_col) for block selection.
+    #[allow(dead_code)]
+    pub fn visual_block_bounds(&self) -> Option<(usize, usize, usize, usize)> {
+        let anchor = self.visual_anchor?;
+        if self.mode() != Mode::VisualBlock {
+            return None;
+        }
+        let start_line = anchor.line.min(self.buffer.cursor_line());
+        let end_line = anchor.line.max(self.buffer.cursor_line());
+        let start_col = anchor.col.min(self.buffer.cursor_col());
+        let end_col = anchor.col.max(self.buffer.cursor_col());
+        Some((start_line, end_line, start_col, end_col))
     }
 
     fn handle_insert_entry(&mut self, entry: InsertEntry) {
@@ -192,6 +481,87 @@ impl Editor {
         self.apply_action(action);
     }
 
+    pub fn start_search(&mut self, direction: SearchDirection) {
+        self.search_state.direction = direction;
+        self.search_input = Some(String::new());
+    }
+
+    pub fn handle_search_char(&mut self, ch: char) {
+        if let Some(ref mut input) = self.search_input {
+            input.push(ch);
+        }
+    }
+
+    pub fn handle_search_backspace(&mut self) {
+        if let Some(ref mut input) = self.search_input {
+            input.pop();
+            if input.is_empty() {
+                self.search_input = None;
+                let action = self.key_parser.handle_escape();
+                self.apply_action(action);
+            }
+        }
+    }
+
+    pub fn execute_search(&mut self) {
+        if let Some(input) = self.search_input.take() {
+            if !input.is_empty() {
+                self.search_state.pattern = input;
+                self.search_state.find_matches(&self.buffer.text());
+                let cursor_offset = self.buffer.cursor_offset();
+                if let Some(offset) = self.search_state.jump_to_nearest(cursor_offset) {
+                    self.buffer.update_cursor_from_offset(offset);
+                    let total = self.search_state.match_count();
+                    let current = self.search_state.current_match_index().unwrap_or(0) + 1;
+                    self.status_message = Some(format!("[{}/{}]", current, total));
+                } else {
+                    self.status_message = Some("Pattern not found".to_string());
+                }
+            }
+            let action = self.key_parser.handle_escape();
+            self.apply_action(action);
+        }
+    }
+
+    pub fn search_input_display(&self) -> Option<String> {
+        self.search_input.as_ref().map(|input| {
+            let prefix = match self.search_state.direction {
+                SearchDirection::Forward => "/",
+                SearchDirection::Backward => "?",
+            };
+            format!("{}{}", prefix, input)
+        })
+    }
+
+    /// Get search highlight ranges for a visible line.
+    /// Returns Vec of (start_col, end_col, is_current) tuples.
+    pub fn search_highlights_for_line(&self, line_idx: usize) -> Vec<(usize, usize, bool)> {
+        if self.search_state.matches.is_empty() {
+            return Vec::new();
+        }
+
+        let line_start = self.buffer.line_to_char(line_idx);
+        let line_end = line_start + self.buffer.line_len_chars(line_idx);
+        let current_idx = self.search_state.current_match_index();
+
+        self.search_state
+            .matches
+            .iter()
+            .enumerate()
+            .filter(|(_, &(start, end))| end > line_start && start < line_end)
+            .map(|(idx, &(start, end))| {
+                let col_start = start.saturating_sub(line_start);
+                let col_end = if end < line_end {
+                    end - line_start
+                } else {
+                    self.buffer.line_content_len(line_idx)
+                };
+                let is_current = current_idx == Some(idx);
+                (col_start, col_end, is_current)
+            })
+            .collect()
+    }
+
     fn save_file(&mut self) {
         if let Some(ref path) = self.file_path {
             match crate::file_io::write_file(std::path::Path::new(path), &self.buffer.text()) {
@@ -207,5 +577,60 @@ impl Editor {
         } else {
             self.status_message = Some("No file path".to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vim::action::*;
+
+    #[test]
+    fn dot_repeat_operator() {
+        let mut editor = Editor::new(None);
+        editor.buffer = TextBuffer::from_text("hello\nworld\nfoo");
+        editor.buffer.set_cursor(0, 0);
+
+        // dd deletes first line
+        editor.apply_action(VimAction::Operator(OperatorAction::DeleteLine));
+        assert_eq!(editor.buffer.text(), "world\nfoo");
+
+        // . repeats dd
+        editor.apply_action(VimAction::DotRepeat);
+        assert_eq!(editor.buffer.text(), "foo");
+    }
+
+    #[test]
+    fn dot_repeat_insert_session() {
+        let mut editor = Editor::new(None);
+        editor.buffer = TextBuffer::from_text("hello");
+        editor.buffer.set_cursor(0, 4); // on 'o'
+
+        // A (append at end) + type "!" + Escape
+        editor.apply_action(VimAction::EnterInsert(InsertEntry::EndOfLine));
+        editor.apply_action(VimAction::InsertChar('!'));
+        editor.apply_action(VimAction::SwitchMode(Mode::Normal));
+        assert_eq!(editor.buffer.text(), "hello!");
+
+        // Move to another position and dot-repeat
+        editor.buffer.set_cursor(0, 0);
+        editor.apply_action(VimAction::DotRepeat);
+        assert_eq!(editor.buffer.text(), "hello!!");
+    }
+
+    #[test]
+    fn dot_repeat_with_count_override() {
+        let mut editor = Editor::new(None);
+        editor.buffer = TextBuffer::from_text("aaa\nbbb\nccc\nddd");
+        editor.buffer.set_cursor(0, 0);
+
+        // dd (count=1)
+        editor.apply_action(VimAction::Operator(OperatorAction::DeleteLine));
+        assert_eq!(editor.buffer.line_count(), 3);
+
+        // 2. should repeat dd twice
+        editor.key_parser.handle_key('2');
+        editor.apply_action(VimAction::DotRepeat);
+        assert_eq!(editor.buffer.text(), "ddd");
     }
 }

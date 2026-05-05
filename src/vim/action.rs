@@ -1,4 +1,11 @@
 use crate::vim::mode::Mode;
+use crate::vim::text_object::TextObject;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SearchDirection {
+    Forward,
+    Backward,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VimAction {
@@ -13,7 +20,28 @@ pub enum VimAction {
     Redo,
     /// Enter insert mode, optionally with a preparatory motion/action
     EnterInsert(InsertEntry),
+    EnterVisual(VisualKind),
+    VisualOperator(VisualOperatorAction),
+    SwapVisualAnchor,
+    DotRepeat,
+    EnterSearch(SearchDirection),
+    SearchNext,
+    SearchPrev,
     Noop,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VisualKind {
+    Char,
+    Line,
+    Block,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VisualOperatorAction {
+    Delete,
+    Change,
+    Yank,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,4 +77,7 @@ pub enum OperatorAction {
     DeleteLine,
     ChangeLine,
     YankLine,
+    DeleteTextObject(TextObject),
+    ChangeTextObject(TextObject),
+    YankTextObject(TextObject),
 }

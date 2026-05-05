@@ -1,5 +1,5 @@
 // src/renderer/editor_view.rs
-use crate::buffer::TextBuffer;
+use crate::editor::Editor;
 use crate::renderer::status_bar::StatusBar;
 use crate::renderer::theme::Theme;
 use crate::vim::mode::Mode;
@@ -14,18 +14,15 @@ impl EditorView {
         Self { scroll_offset: 0 }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn render(
-        &mut self,
-        ui: &mut egui::Ui,
-        buffer: &TextBuffer,
-        theme: &Theme,
-        mode: Mode,
-        font_size: f32,
-        file_path: Option<&str>,
-        command_input: Option<&str>,
-        status_message: Option<&str>,
-    ) {
+    pub fn render(&mut self, ui: &mut egui::Ui, editor: &Editor, theme: &Theme, font_size: f32) {
+        let buffer = &editor.buffer;
+        let mode = editor.mode();
+        let file_path = editor.file_path.as_deref();
+        let command_display = editor.command_input().map(|s| format!(":{}", s));
+        let search_display = editor.search_input_display();
+        let bottom_input = search_display.or(command_display);
+        let status_message = editor.status_message.as_deref();
+
         let font_id = egui::FontId::monospace(font_size);
         let line_height = ui.fonts(|f| f.row_height(&font_id));
         let char_width = ui.fonts(|f| {
@@ -49,7 +46,7 @@ impl EditorView {
             line_height,
             mode,
             file_path,
-            command_input,
+            bottom_input.as_deref(),
             status_message,
         );
 
@@ -81,7 +78,63 @@ impl EditorView {
                 num_color,
             );
 
-            // Text content
+            // Search match highlights (drawn before text so text is visible on top)
+            for (match_start_col, match_end_col, is_current) in editor.search_highlights_for_line(i)
+            {
+                let match_x_start: f32 = if match_start_col == 0 {
+                    0.0
+                } else {
+                    let prefix: String = display.chars().take(match_start_col).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let match_x_end: f32 = {
+                    let prefix: String = display.chars().take(match_end_col).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let match_rect = Rect::from_min_size(
+                    egui::pos2(text_x + match_x_start, y),
+                    Vec2::new(match_x_end - match_x_start, line_height),
+                );
+                let color = if is_current {
+                    theme.search_current
+                } else {
+                    theme.search_match
+                };
+                painter.rect_filled(match_rect, 0.0, color);
+            }
+
+            // Selection highlight (visual modes, drawn before text so text is visible on top)
+            if let Some((sel_start_col, sel_end_col)) = editor.visual_highlights_for_line(i) {
+                let sel_x_start: f32 = if sel_start_col == 0 {
+                    0.0
+                } else {
+                    let prefix: String = display.chars().take(sel_start_col).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let sel_x_end: f32 = {
+                    let prefix: String = display.chars().take(sel_end_col).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let sel_rect = Rect::from_min_size(
+                    egui::pos2(text_x + sel_x_start, y),
+                    Vec2::new(sel_x_end - sel_x_start, line_height),
+                );
+                painter.rect_filled(sel_rect, 0.0, theme.selection);
+            }
+
+            // Text content (drawn after highlights so text is visible)
             painter.text(
                 egui::pos2(text_x, y),
                 egui::Align2::LEFT_TOP,
@@ -132,6 +185,25 @@ impl EditorView {
                             Vec2::new(2.0, line_height),
                         );
                         painter.rect_filled(cursor_rect, 0.0, theme.cursor_insert);
+                    }
+                    Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
+                        // Block cursor for visual modes (same as normal)
+                        let cursor_rect = Rect::from_min_size(
+                            egui::pos2(text_x + cursor_x, y),
+                            Vec2::new(char_width, line_height),
+                        );
+                        painter.rect_filled(cursor_rect, 0.0, theme.cursor);
+
+                        // Draw character under cursor with inverted color
+                        if let Some(ch) = display.chars().nth(cursor_col) {
+                            painter.text(
+                                egui::pos2(text_x + cursor_x, y),
+                                egui::Align2::LEFT_TOP,
+                                ch.to_string(),
+                                font_id.clone(),
+                                theme.background,
+                            );
+                        }
                     }
                 }
             }

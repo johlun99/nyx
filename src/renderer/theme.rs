@@ -25,6 +25,8 @@ pub struct Theme {
     pub status_bar_bg: Color32,
     pub status_bar_fg: Color32,
     pub syntax: SyntaxColors,
+    pub search_match: Color32,
+    pub search_current: Color32,
 }
 
 impl Theme {
@@ -49,6 +51,8 @@ impl Theme {
                 r#type: Color32::from_rgb(0xf9, 0xe2, 0xaf),
                 number: Color32::from_rgb(0xfa, 0xb3, 0x87),
             },
+            search_match: Color32::from_rgba_premultiplied(0x30, 0x2c, 0x22, 0x50),
+            search_current: Color32::from_rgba_premultiplied(0x50, 0x38, 0x28, 0x70),
         }
     }
 }
