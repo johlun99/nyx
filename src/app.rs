@@ -159,6 +159,7 @@ impl eframe::App for NyxApp {
                     &self.editor,
                     &self.theme,
                     self.config.editor.font_size,
+                    self.config.editor.line_numbers,
                 );
             });
     }

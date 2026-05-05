@@ -1,4 +1,5 @@
 // src/renderer/editor_view.rs
+use crate::config::{format_line_number, LineNumberMode};
 use crate::editor::Editor;
 use crate::renderer::status_bar::StatusBar;
 use crate::renderer::theme::Theme;
@@ -14,7 +15,14 @@ impl EditorView {
         Self { scroll_offset: 0 }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, editor: &Editor, theme: &Theme, font_size: f32) {
+    pub fn render(
+        &mut self,
+        ui: &mut egui::Ui,
+        editor: &Editor,
+        theme: &Theme,
+        font_size: f32,
+        line_number_mode: LineNumberMode,
+    ) {
         let buffer = &editor.buffer;
         let mode = editor.mode();
         let file_path = editor.file_path.as_deref();
@@ -52,8 +60,18 @@ impl EditorView {
 
         let editor_height = available.y - status_height;
         let visible_lines = ((editor_height / line_height).ceil() as usize).max(1);
-        let gutter_width = 50.0;
-        let text_x = rect.min.x + gutter_width + 10.0;
+
+        // Dynamic gutter width based on line number mode
+        let (gutter_width, text_x) = if line_number_mode == LineNumberMode::Off {
+            (0.0_f32, rect.min.x + 4.0)
+        } else {
+            // At least 3 chars wide; grow with total line count
+            let max_line = buffer.line_count();
+            let digits = max_line.to_string().len().max(3);
+            // Add 1 char of left padding (rect.min.x + char_width) and 1 char of right padding
+            let width = (digits + 2) as f32 * char_width;
+            (width, rect.min.x + width + 4.0)
+        };
 
         let end_line = (self.scroll_offset + visible_lines).min(buffer.line_count());
 
@@ -63,20 +81,25 @@ impl EditorView {
             let line_str = line_slice.to_string();
             let display = line_str.trim_end_matches('\n');
 
-            // Line number
-            let line_num = format!("{:>4}", i + 1);
-            let num_color = if i == buffer.cursor_line() {
-                theme.line_number_active
-            } else {
-                theme.line_number
-            };
-            painter.text(
-                egui::pos2(rect.min.x + 5.0, y),
-                egui::Align2::LEFT_TOP,
-                &line_num,
-                font_id.clone(),
-                num_color,
-            );
+            // Line number (skip entirely when Off)
+            if line_number_mode != LineNumberMode::Off {
+                let raw = format_line_number(line_number_mode, i, buffer.cursor_line());
+                // Right-align within the gutter (leave 1 char right padding)
+                let gutter_chars = (gutter_width / char_width).floor() as usize;
+                let padded = format!("{:>width$}", raw, width = gutter_chars.saturating_sub(1));
+                let num_color = if i == buffer.cursor_line() {
+                    theme.line_number_active
+                } else {
+                    theme.line_number
+                };
+                painter.text(
+                    egui::pos2(rect.min.x, y),
+                    egui::Align2::LEFT_TOP,
+                    &padded,
+                    font_id.clone(),
+                    num_color,
+                );
+            }
 
             // Search match highlights (drawn before text so text is visible on top)
             for (match_start_col, match_end_col, is_current) in editor.search_highlights_for_line(i)

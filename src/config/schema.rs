@@ -209,6 +209,26 @@ impl Default for NyxConfig {
     }
 }
 
+/// Formats a line number string based on the current mode.
+///
+/// - `Absolute`: returns the 1-based line number.
+/// - `Relative`: the cursor line shows its absolute number; all other lines
+///   show the distance (in lines) from the cursor.
+/// - `Off`: returns an empty string.
+pub fn format_line_number(mode: LineNumberMode, line_idx: usize, cursor_line: usize) -> String {
+    match mode {
+        LineNumberMode::Absolute => format!("{}", line_idx + 1),
+        LineNumberMode::Relative => {
+            if line_idx == cursor_line {
+                format!("{}", line_idx + 1)
+            } else {
+                format!("{}", line_idx.abs_diff(cursor_line))
+            }
+        }
+        LineNumberMode::Off => String::new(),
+    }
+}
+
 impl NyxConfig {
     /// Loads config from path. If missing, creates default and writes it.
     /// If malformed, returns defaults WITHOUT overwriting the existing file.
@@ -440,5 +460,36 @@ mod tests {
         assert!(json.contains("\"line_numbers\": \"relative\""));
         // Old field must not appear
         assert!(!json.contains("relative_line_numbers"));
+    }
+
+    // --- format_line_number tests ---
+
+    #[test]
+    fn format_line_number_absolute() {
+        assert_eq!(format_line_number(LineNumberMode::Absolute, 0, 5), "1");
+        assert_eq!(format_line_number(LineNumberMode::Absolute, 4, 5), "5");
+        assert_eq!(format_line_number(LineNumberMode::Absolute, 9, 5), "10");
+    }
+
+    #[test]
+    fn format_line_number_relative_cursor_line_shows_absolute() {
+        // cursor is at line index 4 (1-based: 5)
+        assert_eq!(format_line_number(LineNumberMode::Relative, 4, 4), "5");
+        // cursor at line 0
+        assert_eq!(format_line_number(LineNumberMode::Relative, 0, 0), "1");
+    }
+
+    #[test]
+    fn format_line_number_relative_other_lines_show_distance() {
+        // cursor at line index 4; line index 6 is 2 away
+        assert_eq!(format_line_number(LineNumberMode::Relative, 6, 4), "2");
+        // line index 1 is 3 away from cursor at 4
+        assert_eq!(format_line_number(LineNumberMode::Relative, 1, 4), "3");
+    }
+
+    #[test]
+    fn format_line_number_off_returns_empty() {
+        assert_eq!(format_line_number(LineNumberMode::Off, 0, 0), "");
+        assert_eq!(format_line_number(LineNumberMode::Off, 5, 3), "");
     }
 }
