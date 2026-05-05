@@ -1,8 +1,10 @@
 // src/editor.rs
 use crate::buffer::TextBuffer;
+use crate::vim::action::SearchDirection;
 use crate::vim::command::{CommandParser, CommandResult};
 use crate::vim::motion::execute_motion;
 use crate::vim::operator::OperatorEngine;
+use crate::vim::search::SearchState;
 use crate::vim::{InsertEntry, KeyParser, Mode, VimAction, VisualOperatorAction};
 
 #[derive(Debug, Clone)]
@@ -28,6 +30,8 @@ pub struct Editor {
     pub command_parser: CommandParser,
     pub visual_anchor: Option<VisualAnchor>,
     pub last_action: Option<LastAction>,
+    pub search_state: SearchState,
+    pub search_input: Option<String>,
     recording_action: Option<LastAction>,
     replaying: bool,
 }
@@ -58,6 +62,8 @@ impl Editor {
             command_parser: CommandParser::new(),
             visual_anchor: None,
             last_action: None,
+            search_state: SearchState::new(),
+            search_input: None,
             recording_action: None,
             replaying: false,
         }
@@ -71,6 +77,21 @@ impl Editor {
         if action == VimAction::Noop {
             return;
         }
+
+        // Invalidate search cache on edits
+        match &action {
+            VimAction::InsertChar(_)
+            | VimAction::DeleteCharBefore
+            | VimAction::Operator(_)
+            | VimAction::VisualOperator(_)
+            | VimAction::Paste
+            | VimAction::Undo
+            | VimAction::Redo => {
+                self.search_state.matches.clear();
+            }
+            _ => {}
+        }
+
         self.status_message = None;
 
         let count = self.key_parser.take_count();
@@ -226,9 +247,37 @@ impl Editor {
                     self.replaying = false;
                 }
             }
-            VimAction::EnterSearch(_) => {}
-            VimAction::SearchNext => {}
-            VimAction::SearchPrev => {}
+            VimAction::EnterSearch(ref direction) => {
+                self.start_search(direction.clone());
+            }
+            VimAction::SearchNext => {
+                if !self.search_state.pattern.is_empty() {
+                    if self.search_state.matches.is_empty() {
+                        self.search_state.find_matches(&self.buffer.text());
+                    }
+                    let cursor = self.buffer.cursor_offset();
+                    if let Some(offset) = self.search_state.next_match(cursor) {
+                        self.buffer.update_cursor_from_offset(offset);
+                        let total = self.search_state.match_count();
+                        let current = self.search_state.current_match_index().unwrap_or(0) + 1;
+                        self.status_message = Some(format!("[{}/{}]", current, total));
+                    }
+                }
+            }
+            VimAction::SearchPrev => {
+                if !self.search_state.pattern.is_empty() {
+                    if self.search_state.matches.is_empty() {
+                        self.search_state.find_matches(&self.buffer.text());
+                    }
+                    let cursor = self.buffer.cursor_offset();
+                    if let Some(offset) = self.search_state.prev_match(cursor) {
+                        self.buffer.update_cursor_from_offset(offset);
+                        let total = self.search_state.match_count();
+                        let current = self.search_state.current_match_index().unwrap_or(0) + 1;
+                        self.status_message = Some(format!("[{}/{}]", current, total));
+                    }
+                }
+            }
             VimAction::Noop => unreachable!(),
         }
     }
@@ -425,6 +474,58 @@ impl Editor {
         self.command_parser.clear();
         let action = self.key_parser.handle_escape();
         self.apply_action(action);
+    }
+
+    pub fn start_search(&mut self, direction: SearchDirection) {
+        self.search_state.direction = direction;
+        self.search_input = Some(String::new());
+    }
+
+    pub fn handle_search_char(&mut self, ch: char) {
+        if let Some(ref mut input) = self.search_input {
+            input.push(ch);
+        }
+    }
+
+    pub fn handle_search_backspace(&mut self) {
+        if let Some(ref mut input) = self.search_input {
+            input.pop();
+            if input.is_empty() {
+                self.search_input = None;
+                let action = self.key_parser.handle_escape();
+                self.apply_action(action);
+            }
+        }
+    }
+
+    pub fn execute_search(&mut self) {
+        if let Some(input) = self.search_input.take() {
+            if !input.is_empty() {
+                self.search_state.pattern = input;
+                self.search_state.find_matches(&self.buffer.text());
+                let cursor_offset = self.buffer.cursor_offset();
+                if let Some(offset) = self.search_state.jump_to_nearest(cursor_offset) {
+                    self.buffer.update_cursor_from_offset(offset);
+                    let total = self.search_state.match_count();
+                    let current = self.search_state.current_match_index().unwrap_or(0) + 1;
+                    self.status_message = Some(format!("[{}/{}]", current, total));
+                } else {
+                    self.status_message = Some("Pattern not found".to_string());
+                }
+            }
+            let action = self.key_parser.handle_escape();
+            self.apply_action(action);
+        }
+    }
+
+    pub fn search_input_display(&self) -> Option<String> {
+        self.search_input.as_ref().map(|input| {
+            let prefix = match self.search_state.direction {
+                SearchDirection::Forward => "/",
+                SearchDirection::Backward => "?",
+            };
+            format!("{}{}", prefix, input)
+        })
     }
 
     fn save_file(&mut self) {

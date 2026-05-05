@@ -1,4 +1,5 @@
 use crate::vim::action::*;
+use crate::vim::action::SearchDirection;
 use crate::vim::mode::Mode;
 use crate::vim::text_object::{TextObject, TextObjectKind};
 
@@ -251,6 +252,12 @@ impl KeyParser {
             // Dot-repeat
             '.' => VimAction::DotRepeat,
 
+            // Search
+            '/' => VimAction::EnterSearch(SearchDirection::Forward),
+            '?' => VimAction::EnterSearch(SearchDirection::Backward),
+            'n' => VimAction::SearchNext,
+            'N' => VimAction::SearchPrev,
+
             _ => VimAction::Noop,
         }
     }
@@ -367,6 +374,7 @@ impl KeyParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vim::action::SearchDirection;
     use crate::vim::text_object::{TextObject, TextObjectKind};
 
     #[test]
@@ -704,5 +712,35 @@ mod tests {
     fn dot_emits_dot_repeat() {
         let mut parser = KeyParser::new();
         assert_eq!(parser.handle_key('.'), VimAction::DotRepeat);
+    }
+
+    #[test]
+    fn forward_search_key() {
+        let mut parser = KeyParser::new();
+        assert_eq!(
+            parser.handle_key('/'),
+            VimAction::EnterSearch(SearchDirection::Forward)
+        );
+    }
+
+    #[test]
+    fn backward_search_key() {
+        let mut parser = KeyParser::new();
+        assert_eq!(
+            parser.handle_key('?'),
+            VimAction::EnterSearch(SearchDirection::Backward)
+        );
+    }
+
+    #[test]
+    fn search_next_key() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('n'), VimAction::SearchNext);
+    }
+
+    #[test]
+    fn search_prev_key() {
+        let mut parser = KeyParser::new();
+        assert_eq!(parser.handle_key('N'), VimAction::SearchPrev);
     }
 }

@@ -52,6 +52,34 @@ impl NyxApp {
                 return;
             }
 
+            // Search input mode
+            if self.editor.search_input.is_some() {
+                if input.key_pressed(egui::Key::Enter) {
+                    self.editor.execute_search();
+                    return;
+                }
+                if input.key_pressed(egui::Key::Escape)
+                    || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
+                {
+                    self.editor.search_input = None;
+                    let action = self.editor.key_parser.handle_escape();
+                    self.editor.apply_action(action);
+                    return;
+                }
+                if input.key_pressed(egui::Key::Backspace) {
+                    self.editor.handle_search_backspace();
+                    return;
+                }
+                for event in &input.events {
+                    if let egui::Event::Text(text) = event {
+                        for ch in text.chars() {
+                            self.editor.handle_search_char(ch);
+                        }
+                    }
+                }
+                return;
+            }
+
             // Escape and Ctrl+[ (both exit to Normal mode)
             if input.key_pressed(egui::Key::Escape)
                 || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
