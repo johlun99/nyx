@@ -45,6 +45,7 @@ impl RegisterFile {
     }
 
     /// Get from system clipboard. Needs &mut self because arboard requires it.
+    #[allow(dead_code)]
     pub fn get_mut(&mut self, name: Option<char>) -> RegisterEntry {
         match name {
             Some('+') => {
