@@ -42,7 +42,7 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(file_path: Option<String>, configured_languages: &[String]) -> Self {
+    pub fn new(file_path: Option<String>) -> Self {
         let buffer = if let Some(ref path) = file_path {
             match crate::file_io::read_file(std::path::Path::new(path)) {
                 Ok(content) => TextBuffer::from_text(&content),
@@ -57,30 +57,16 @@ impl Editor {
             )
         };
 
-        let mut status_message = None;
         let syntax_state = if let Some(ref path) = file_path {
             let ext = std::path::Path::new(path)
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("");
-            if let Some(lang_name) = language_for_extension(ext) {
-                if configured_languages.iter().any(|l| l == lang_name) {
-                    match SyntaxState::new(lang_name, ext) {
-                        Some(mut state) => {
-                            state.parse(&buffer.text());
-                            Some(state)
-                        }
-                        None => None,
-                    }
-                } else {
-                    status_message = Some(format!(
-                        "No syntax for .{ext} \u{2014} add \"{lang_name}\" to languages in config"
-                    ));
-                    None
-                }
-            } else {
-                None
-            }
+            language_for_extension(ext).and_then(|lang_name| {
+                let mut state = SyntaxState::new(lang_name, ext)?;
+                state.parse(&buffer.text());
+                Some(state)
+            })
         } else {
             None
         };
@@ -91,7 +77,7 @@ impl Editor {
             operator_engine: OperatorEngine::new(),
             file_path,
             should_quit: false,
-            status_message,
+            status_message: None,
             command_parser: CommandParser::new(),
             visual_anchor: None,
             last_action: None,
@@ -110,6 +96,17 @@ impl Editor {
 
     pub fn set_tab_size(&mut self, size: usize) {
         self.tab_size = size;
+    }
+
+    /// Check if backspace should remove a full tab-width of spaces.
+    fn should_dedent(&self) -> bool {
+        let col = self.buffer.cursor_col();
+        if col < self.tab_size || !col.is_multiple_of(self.tab_size) {
+            return false;
+        }
+        let line = self.buffer.cursor_line();
+        let line_text = self.buffer.line_slice(line).to_string();
+        line_text[..col].chars().all(|c| c == ' ')
     }
 
     pub fn apply_action(&mut self, action: VimAction) {
@@ -211,7 +208,13 @@ impl Editor {
                 }
             }
             VimAction::DeleteCharBefore => {
-                self.buffer.delete_char_before_cursor();
+                if self.mode() == Mode::Insert && self.should_dedent() {
+                    for _ in 0..self.tab_size {
+                        self.buffer.delete_char_before_cursor();
+                    }
+                } else {
+                    self.buffer.delete_char_before_cursor();
+                }
             }
             VimAction::EnterInsert(entry) => {
                 self.buffer.begin_undo_group();
@@ -683,7 +686,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_operator() {
-        let mut editor = Editor::new(None, &[]);
+        let mut editor = Editor::new(None);
         editor.buffer = TextBuffer::from_text("hello\nworld\nfoo");
         editor.buffer.set_cursor(0, 0);
 
@@ -698,7 +701,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_insert_session() {
-        let mut editor = Editor::new(None, &[]);
+        let mut editor = Editor::new(None);
         editor.buffer = TextBuffer::from_text("hello");
         editor.buffer.set_cursor(0, 4); // on 'o'
 
@@ -716,7 +719,7 @@ mod tests {
 
     #[test]
     fn dot_repeat_with_count_override() {
-        let mut editor = Editor::new(None, &[]);
+        let mut editor = Editor::new(None);
         editor.buffer = TextBuffer::from_text("aaa\nbbb\nccc\nddd");
         editor.buffer.set_cursor(0, 0);
 
@@ -731,21 +734,12 @@ mod tests {
     }
 
     #[test]
-    fn editor_creates_syntax_state_for_configured_language() {
+    fn editor_creates_syntax_state_for_known_extension() {
         let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
         std::fs::write(tmp.path(), "fn main() {}").unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
-        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        let editor = Editor::new(Some(path));
         assert!(editor.syntax_state.is_some());
-    }
-
-    #[test]
-    fn editor_no_syntax_state_for_unconfigured_language() {
-        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
-        std::fs::write(tmp.path(), "fn main() {}").unwrap();
-        let path = tmp.path().to_str().unwrap().to_string();
-        let editor = Editor::new(Some(path), &[]);
-        assert!(editor.syntax_state.is_none());
     }
 
     #[test]
@@ -753,13 +747,13 @@ mod tests {
         let tmp = tempfile::NamedTempFile::with_suffix(".xyz").unwrap();
         std::fs::write(tmp.path(), "hello").unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
-        let editor = Editor::new(Some(path), &["rust".to_string()]);
+        let editor = Editor::new(Some(path));
         assert!(editor.syntax_state.is_none());
     }
 
     #[test]
     fn new_line_below_copies_indent() {
-        let mut editor = Editor::new(None, &[]);
+        let mut editor = Editor::new(None);
         editor.buffer = TextBuffer::from_text("    hello\nworld");
         editor.buffer.set_cursor(0, 4);
 
@@ -779,7 +773,7 @@ mod tests {
 
     #[test]
     fn new_line_above_copies_indent() {
-        let mut editor = Editor::new(None, &[]);
+        let mut editor = Editor::new(None);
         editor.buffer = TextBuffer::from_text("    hello\nworld");
         editor.buffer.set_cursor(0, 4);
 
@@ -799,7 +793,7 @@ mod tests {
 
     #[test]
     fn enter_in_insert_mode_copies_indent() {
-        let mut editor = Editor::new(None, &[]);
+        let mut editor = Editor::new(None);
         editor.buffer = TextBuffer::from_text("    hello");
         editor.buffer.set_cursor_with_mode(0, 9, true); // end of "    hello"
 
@@ -809,49 +803,5 @@ mod tests {
 
         assert_eq!(editor.buffer.cursor_line(), 1);
         assert_eq!(editor.buffer.cursor_col(), 4); // indented to match line above
-    }
-
-    #[test]
-    fn warning_for_unconfigured_language() {
-        let tmp = tempfile::NamedTempFile::with_suffix(".py").unwrap();
-        std::fs::write(tmp.path(), "print('hello')").unwrap();
-        let path = tmp.path().to_str().unwrap().to_string();
-        let editor = Editor::new(Some(path), &["rust".to_string()]);
-        assert!(editor.syntax_state.is_none());
-        assert!(
-            editor.status_message.as_ref().unwrap().contains("python"),
-            "Expected warning mentioning 'python', got: {:?}",
-            editor.status_message
-        );
-    }
-
-    #[test]
-    fn no_warning_for_unknown_extension() {
-        let tmp = tempfile::NamedTempFile::with_suffix(".xyz").unwrap();
-        std::fs::write(tmp.path(), "data").unwrap();
-        let path = tmp.path().to_str().unwrap().to_string();
-        let editor = Editor::new(Some(path), &[]);
-        assert!(editor.syntax_state.is_none());
-        assert!(
-            editor.status_message.is_none(),
-            "Expected no warning for unknown extension, got: {:?}",
-            editor.status_message
-        );
-    }
-
-    #[test]
-    fn no_warning_for_configured_language() {
-        let tmp = tempfile::NamedTempFile::with_suffix(".rs").unwrap();
-        std::fs::write(tmp.path(), "fn main() {}").unwrap();
-        let path = tmp.path().to_str().unwrap().to_string();
-        let editor = Editor::new(Some(path), &["rust".to_string()]);
-        assert!(editor.syntax_state.is_some());
-        // Status message should be None (or a success message, not a warning)
-        let msg = editor.status_message.as_deref().unwrap_or("");
-        assert!(
-            !msg.contains("add"),
-            "Expected no 'add to config' warning, got: {:?}",
-            msg
-        );
     }
 }

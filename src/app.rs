@@ -2,6 +2,7 @@
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::renderer::{EditorView, Theme};
+use crate::views::{AppView, KeybindingsView, SettingsAction, SettingsView};
 use crate::vim::{Mode, VimAction, VisualKind};
 use eframe::egui;
 
@@ -10,21 +11,78 @@ pub struct NyxApp {
     editor_view: EditorView,
     theme: Theme,
     config: NyxConfig,
+    active_view: AppView,
+    keybindings_view: KeybindingsView,
+    settings_view: SettingsView,
 }
 
 impl NyxApp {
     pub fn new(file_path: Option<String>, config: NyxConfig) -> Self {
-        let mut editor = Editor::new(file_path, &config.languages);
+        let mut editor = Editor::new(file_path);
         editor.set_tab_size(config.editor.tab_size);
         Self {
             editor,
             editor_view: EditorView::new(),
             theme: Theme::default_dark(),
             config,
+            active_view: AppView::default(),
+            keybindings_view: KeybindingsView::new(),
+            settings_view: SettingsView::new(),
         }
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
+        // --- App-level shortcuts (work from any view) ---
+        let mut view_switch: Option<AppView> = None;
+        ctx.input(|input| {
+            if input.modifiers.command && input.key_pressed(egui::Key::Comma) {
+                view_switch = Some(match self.active_view {
+                    AppView::Settings => AppView::Editor,
+                    _ => AppView::Settings,
+                });
+            }
+            if input.modifiers.command && input.key_pressed(egui::Key::K) {
+                view_switch = Some(match self.active_view {
+                    AppView::Keybindings => AppView::Editor,
+                    _ => AppView::Keybindings,
+                });
+            }
+        });
+        if let Some(new_view) = view_switch {
+            if new_view == AppView::Keybindings {
+                self.keybindings_view.search.clear();
+            }
+            self.active_view = new_view;
+            return;
+        }
+
+        // --- Non-editor view input ---
+        match self.active_view {
+            AppView::Keybindings => {
+                let should_close = self.keybindings_view.handle_input(ctx);
+                if should_close {
+                    self.active_view = AppView::Editor;
+                }
+                return;
+            }
+            AppView::Settings => {
+                let action = self.settings_view.handle_input(ctx, &mut self.config);
+                match action {
+                    SettingsAction::Close => {
+                        self.active_view = AppView::Editor;
+                    }
+                    SettingsAction::ConfigChanged => {
+                        self.editor.set_tab_size(self.config.editor.tab_size);
+                        let _ = self.config.save(&NyxConfig::config_path());
+                    }
+                    SettingsAction::None => {}
+                }
+                return;
+            }
+            AppView::Editor => {}
+        }
+
+        // --- Editor input (unchanged from here down) ---
         ctx.input(|input| {
             // Command mode intercepts all input
             if self.editor.mode() == Mode::Command {
@@ -119,6 +177,16 @@ impl NyxApp {
                 return;
             }
 
+            // Tab — insert spaces in insert mode
+            if input.key_pressed(egui::Key::Tab) && self.editor.mode() == Mode::Insert {
+                let tab_size = self.editor.tab_size;
+                for _ in 0..tab_size {
+                    let action = self.editor.key_parser.handle_key(' ');
+                    self.editor.apply_action(action);
+                }
+                return;
+            }
+
             // Enter
             if input.key_pressed(egui::Key::Enter) {
                 if self.editor.mode() == Mode::Insert {
@@ -153,18 +221,47 @@ impl eframe::App for NyxApp {
 
         self.handle_input(ctx);
 
-        self.editor.ensure_syntax_parsed();
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ctx, |ui| {
-                self.editor_view.render(
-                    ui,
-                    &self.editor,
-                    &self.theme,
-                    self.config.editor.font_size,
-                    self.config.editor.line_numbers,
-                );
-            });
+        match self.active_view {
+            AppView::Editor => {
+                self.editor.ensure_syntax_parsed();
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        self.editor_view.render(
+                            ui,
+                            &self.editor,
+                            &self.theme,
+                            self.config.editor.font_size,
+                            self.config.editor.line_numbers,
+                        );
+                    });
+            }
+            AppView::Settings => {
+                let changed = self
+                    .settings_view
+                    .render(ctx, &mut self.config, &self.theme);
+                if changed {
+                    self.editor.set_tab_size(self.config.editor.tab_size);
+                    let _ = self.config.save(&NyxConfig::config_path());
+                }
+            }
+            AppView::Keybindings => {
+                // Render editor behind (it will be dimmed by the overlay)
+                self.editor.ensure_syntax_parsed();
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        self.editor_view.render(
+                            ui,
+                            &self.editor,
+                            &self.theme,
+                            self.config.editor.font_size,
+                            self.config.editor.line_numbers,
+                        );
+                    });
+                // Overlay on top
+                self.keybindings_view.render(ctx, &self.theme);
+            }
+        }
     }
 }
