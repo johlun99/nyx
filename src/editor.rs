@@ -101,7 +101,7 @@ impl Editor {
     /// Check if backspace should remove a full tab-width of spaces.
     fn should_dedent(&self) -> bool {
         let col = self.buffer.cursor_col();
-        if col < self.tab_size || col % self.tab_size != 0 {
+        if col < self.tab_size || !col.is_multiple_of(self.tab_size) {
             return false;
         }
         let line = self.buffer.cursor_line();

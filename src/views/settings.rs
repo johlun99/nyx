@@ -267,13 +267,9 @@ impl SettingsView {
     /// Returns true if config was changed.
     pub fn commit_edit(&mut self, config: &mut NyxConfig) -> bool {
         let changed = match self.editing {
-            Some(SettingsField::FontFamily) => {
-                if !self.edit_buffer.is_empty() {
-                    config.editor.font_family = self.edit_buffer.clone();
-                    true
-                } else {
-                    false
-                }
+            Some(SettingsField::FontFamily) if !self.edit_buffer.is_empty() => {
+                config.editor.font_family = self.edit_buffer.clone();
+                true
             }
             Some(SettingsField::FontSize) => {
                 if let Ok(size) = self.edit_buffer.parse::<f32>() {
