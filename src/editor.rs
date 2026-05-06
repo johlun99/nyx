@@ -98,6 +98,17 @@ impl Editor {
         self.tab_size = size;
     }
 
+    /// Check if backspace should remove a full tab-width of spaces.
+    fn should_dedent(&self) -> bool {
+        let col = self.buffer.cursor_col();
+        if col < self.tab_size || col % self.tab_size != 0 {
+            return false;
+        }
+        let line = self.buffer.cursor_line();
+        let line_text = self.buffer.line_slice(line).to_string();
+        line_text[..col].chars().all(|c| c == ' ')
+    }
+
     pub fn apply_action(&mut self, action: VimAction) {
         if action == VimAction::Noop {
             return;
@@ -197,7 +208,13 @@ impl Editor {
                 }
             }
             VimAction::DeleteCharBefore => {
-                self.buffer.delete_char_before_cursor();
+                if self.mode() == Mode::Insert && self.should_dedent() {
+                    for _ in 0..self.tab_size {
+                        self.buffer.delete_char_before_cursor();
+                    }
+                } else {
+                    self.buffer.delete_char_before_cursor();
+                }
             }
             VimAction::EnterInsert(entry) => {
                 self.buffer.begin_undo_group();
