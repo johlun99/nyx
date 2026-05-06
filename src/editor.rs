@@ -39,6 +39,8 @@ pub struct Editor {
     replaying: bool,
     pub syntax_state: Option<SyntaxState>,
     pub tab_size: usize,
+    last_saved_text: String,
+    pending_did_save: bool,
 }
 
 impl Editor {
@@ -70,6 +72,7 @@ impl Editor {
         } else {
             None
         };
+        let last_saved_text = buffer.text();
 
         Self {
             buffer,
@@ -87,6 +90,8 @@ impl Editor {
             replaying: false,
             syntax_state,
             tab_size: 4,
+            last_saved_text,
+            pending_did_save: false,
         }
     }
 
@@ -538,24 +543,37 @@ impl Editor {
 
     pub fn execute_command(&mut self) {
         let result = self.command_parser.execute();
+        let mut message_to_keep: Option<String> = None;
         match result {
-            CommandResult::Quit | CommandResult::ForceQuit => {
+            CommandResult::Quit => {
+                if self.has_unsaved_changes() {
+                    message_to_keep =
+                        Some("No write since last change (add ! to override: :q!)".to_string());
+                } else {
+                    self.should_quit = true;
+                }
+            }
+            CommandResult::ForceQuit => {
                 self.should_quit = true;
             }
             CommandResult::Write => {
                 self.save_file();
             }
             CommandResult::WriteQuit => {
-                self.save_file();
-                self.should_quit = true;
+                if self.save_file() {
+                    self.should_quit = true;
+                }
             }
             CommandResult::Unknown(cmd) => {
-                self.status_message = Some(format!("Unknown command: {}", cmd));
+                message_to_keep = Some(format!("Unknown command: {}", cmd));
             }
         }
         self.command_parser.clear();
         let action = self.key_parser.handle_escape();
         self.apply_action(action);
+        if let Some(message) = message_to_keep {
+            self.status_message = Some(message);
+        }
     }
 
     pub fn start_search(&mut self, direction: SearchDirection) {
@@ -661,21 +679,36 @@ impl Editor {
         }
     }
 
-    fn save_file(&mut self) {
+    fn save_file(&mut self) -> bool {
         if let Some(ref path) = self.file_path {
             match crate::file_io::write_file(std::path::Path::new(path), &self.buffer.text()) {
                 Ok(_) => {
                     self.status_message = Some(format!("Written: {}", path));
+                    self.last_saved_text = self.buffer.text();
+                    self.pending_did_save = true;
                     tracing::info!("File saved: {}", path);
+                    true
                 }
                 Err(e) => {
                     self.status_message = Some(format!("Error writing {}: {}", path, e));
                     tracing::error!("Failed to save {}: {}", path, e);
+                    false
                 }
             }
         } else {
             self.status_message = Some("No file path".to_string());
+            false
         }
+    }
+
+    fn has_unsaved_changes(&self) -> bool {
+        self.buffer.text() != self.last_saved_text
+    }
+
+    pub fn take_did_save_event(&mut self) -> bool {
+        let had = self.pending_did_save;
+        self.pending_did_save = false;
+        had
     }
 }
 
@@ -803,5 +836,91 @@ mod tests {
 
         assert_eq!(editor.buffer.cursor_line(), 1);
         assert_eq!(editor.buffer.cursor_col(), 4); // indented to match line above
+    }
+
+    #[test]
+    fn syntax_highlights_work_for_new_file() {
+        // Simulates: cargo run -- newfile.py (file doesn't exist)
+        // Then typing "def foo():" in insert mode
+        let mut editor = Editor::new(Some("nonexistent.py".to_string()));
+        assert!(
+            editor.syntax_state.is_some(),
+            "Should create syntax state from extension even if file doesn't exist"
+        );
+
+        // Type "def foo():" character by character
+        for ch in "def foo():".chars() {
+            editor.apply_action(VimAction::InsertChar(ch));
+        }
+
+        // Simulate what app.rs does each frame
+        editor.ensure_syntax_parsed();
+
+        let theme = crate::renderer::theme::Theme::default_dark();
+        let spans = editor.syntax_highlights_for_line(0, &theme);
+        assert!(
+            !spans.is_empty(),
+            "Expected syntax highlights after typing into new .py file"
+        );
+        // "def" should be a keyword
+        let has_keyword = spans
+            .iter()
+            .any(|&(start, end, color)| start == 0 && end == 3 && color == theme.syntax.keyword);
+        assert!(has_keyword, "Expected 'def' highlighted as keyword");
+    }
+
+    #[test]
+    fn enter_after_python_colon_indents() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".py").unwrap();
+        std::fs::write(tmp.path(), "def foo():").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let mut editor = Editor::new(Some(path));
+
+        // Cursor at end of "def foo():"
+        editor.buffer.set_cursor_with_mode(0, 10, true);
+        editor.set_tab_size(4);
+        editor.buffer.begin_undo_group();
+        editor.apply_action(VimAction::InsertChar('\n'));
+
+        assert_eq!(editor.buffer.cursor_line(), 1);
+        assert_eq!(
+            editor.buffer.cursor_col(),
+            4,
+            "Expected 4-space indent after colon, got {}. Line content: {:?}",
+            editor.buffer.cursor_col(),
+            editor.buffer.line_slice(1).to_string()
+        );
+    }
+
+    #[test]
+    fn quit_is_blocked_when_unsaved_changes_exist() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".txt").unwrap();
+        std::fs::write(tmp.path(), "hello\n").unwrap();
+        let mut editor = Editor::new(Some(tmp.path().to_string_lossy().to_string()));
+
+        editor.buffer.set_cursor_with_mode(0, 5, true);
+        editor.buffer.insert_char('!');
+        editor.command_parser.input = "q".to_string();
+        editor.execute_command();
+
+        assert!(!editor.should_quit);
+        assert_eq!(
+            editor.status_message.as_deref(),
+            Some("No write since last change (add ! to override: :q!)")
+        );
+    }
+
+    #[test]
+    fn force_quit_ignores_unsaved_changes() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".txt").unwrap();
+        std::fs::write(tmp.path(), "hello\n").unwrap();
+        let mut editor = Editor::new(Some(tmp.path().to_string_lossy().to_string()));
+
+        editor.buffer.set_cursor_with_mode(0, 5, true);
+        editor.buffer.insert_char('!');
+        editor.command_parser.input = "q!".to_string();
+        editor.execute_command();
+
+        assert!(editor.should_quit);
     }
 }
