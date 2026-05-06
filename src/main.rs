@@ -4,6 +4,7 @@ mod buffer;
 mod config;
 mod editor;
 mod file_io;
+mod lsp;
 mod renderer;
 mod syntax;
 mod views;

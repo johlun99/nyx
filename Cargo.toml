@@ -43,5 +43,7 @@ tree-sitter-dart = "0.2.0"
 tree-sitter-ocaml = "0.24.2"
 tree-sitter-svelte-ng = "1.0.2"
 tree-sitter-handlebars = "0.1.0"
+crossbeam-channel = "0.5"
+ureq = "3"
 
 [dev-dependencies]
