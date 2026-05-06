@@ -55,6 +55,9 @@ fn treesitter_indent(
     if opener_count > 0 {
         // Line has unmatched openers — increase indent
         base_indent + tab_size
+    } else if trimmed.ends_with(':') && !trimmed.ends_with("::") {
+        // Line ends with ':' (Python def/if/for/class, etc.) — increase indent
+        base_indent + tab_size
     } else if trimmed.starts_with('}') || trimmed.starts_with(')') || trimmed.starts_with(']') {
         // Line starts with a closer — decrease indent
         base_indent.saturating_sub(tab_size)
@@ -137,6 +140,36 @@ mod tests {
         // Line 1 has "    let x = 1;" — no opener, so copy indent (4)
         let indent = compute_indent(&buffer, Some(&state), 1, 4);
         assert_eq!(indent, 4);
+    }
+
+    #[test]
+    fn compute_indent_after_colon() {
+        let source = "def foo():\n";
+        let buffer = TextBuffer::from_text(source);
+        let mut state = SyntaxState::new("python", "py").unwrap();
+        state.parse(source);
+        let indent = compute_indent(&buffer, Some(&state), 0, 4);
+        assert_eq!(indent, 4);
+    }
+
+    #[test]
+    fn compute_indent_after_colon_with_existing_indent() {
+        let source = "    if x > 0:\n";
+        let buffer = TextBuffer::from_text(source);
+        let mut state = SyntaxState::new("python", "py").unwrap();
+        state.parse(source);
+        let indent = compute_indent(&buffer, Some(&state), 0, 4);
+        assert_eq!(indent, 8);
+    }
+
+    #[test]
+    fn compute_indent_double_colon_no_indent() {
+        let source = "std::io::Result\n";
+        let buffer = TextBuffer::from_text(source);
+        let mut state = SyntaxState::new("rust", "rs").unwrap();
+        state.parse(source);
+        let indent = compute_indent(&buffer, Some(&state), 0, 4);
+        assert_eq!(indent, 0);
     }
 
     #[test]

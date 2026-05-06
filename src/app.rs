@@ -177,6 +177,16 @@ impl NyxApp {
                 return;
             }
 
+            // Tab — insert spaces in insert mode
+            if input.key_pressed(egui::Key::Tab) && self.editor.mode() == Mode::Insert {
+                let tab_size = self.editor.tab_size;
+                for _ in 0..tab_size {
+                    let action = self.editor.key_parser.handle_key(' ');
+                    self.editor.apply_action(action);
+                }
+                return;
+            }
+
             // Enter
             if input.key_pressed(egui::Key::Enter) {
                 if self.editor.mode() == Mode::Insert {
