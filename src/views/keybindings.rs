@@ -221,6 +221,16 @@ impl KeybindingsView {
                 action: "Force quit",
                 key: ":q!",
             },
+            KeybindingEntry {
+                category: "App",
+                action: "LSP Servers",
+                key: "\u{2318}L",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Autocomplete",
+                key: "Ctrl+Space",
+            },
         ]
     }
 

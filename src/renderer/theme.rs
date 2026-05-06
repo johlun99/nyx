@@ -29,6 +29,11 @@ pub struct Theme {
     pub syntax: SyntaxColors,
     pub search_match: Color32,
     pub search_current: Color32,
+    // Diagnostic colors
+    pub error_fg: Color32,
+    pub warning_fg: Color32,
+    pub error_underline: Color32,
+    pub warning_underline: Color32,
 }
 
 impl Theme {
@@ -57,6 +62,11 @@ impl Theme {
             },
             search_match: Color32::from_rgba_premultiplied(0x30, 0x2c, 0x22, 0x50),
             search_current: Color32::from_rgba_premultiplied(0x50, 0x38, 0x28, 0x70),
+            // Catppuccin Mocha: red = #f38ba8, yellow = #f9e2af
+            error_fg: Color32::from_rgb(0xf3, 0x8b, 0xa8),
+            warning_fg: Color32::from_rgb(0xf9, 0xe2, 0xaf),
+            error_underline: Color32::from_rgba_premultiplied(0xf3, 0x8b, 0xa8, 0xb0),
+            warning_underline: Color32::from_rgba_premultiplied(0xf9, 0xe2, 0xaf, 0xb0),
         }
     }
 }

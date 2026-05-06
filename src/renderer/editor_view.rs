@@ -1,10 +1,13 @@
 // src/renderer/editor_view.rs
 use crate::config::{format_line_number, LineNumberMode};
 use crate::editor::Editor;
+use crate::lsp::{CompletionState, LspManager, NyxDiagnostic};
 use crate::renderer::status_bar::StatusBar;
 use crate::renderer::theme::Theme;
 use crate::vim::mode::Mode;
 use eframe::egui::{self, Rect, Sense, Vec2};
+
+use crate::lsp::protocol::DiagnosticSeverity;
 
 pub struct EditorView {
     pub scroll_offset: usize,
@@ -15,6 +18,7 @@ impl EditorView {
         Self { scroll_offset: 0 }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
@@ -22,6 +26,7 @@ impl EditorView {
         theme: &Theme,
         font_size: f32,
         line_number_mode: LineNumberMode,
+        lsp_manager: &LspManager,
     ) {
         let buffer = &editor.buffer;
         let mode = editor.mode();
@@ -30,6 +35,14 @@ impl EditorView {
         let search_display = editor.search_input_display();
         let bottom_input = search_display.or(command_display);
         let status_message = editor.status_message.as_deref();
+        let lsp_health = file_path.and_then(|p| lsp_manager.health_summary_for_file(p));
+
+        let diagnostics: &[NyxDiagnostic] = file_path
+            .map(|p| lsp_manager.diagnostics_for_file(p))
+            .unwrap_or(&[]);
+        let (error_count, warning_count) = file_path
+            .map(|p| lsp_manager.diagnostic_counts(p))
+            .unwrap_or((0, 0));
 
         let font_id = egui::FontId::monospace(font_size);
         let line_height = ui.fonts(|f| f.row_height(&font_id));
@@ -56,21 +69,25 @@ impl EditorView {
             file_path,
             bottom_input.as_deref(),
             status_message,
+            lsp_health.as_deref(),
+            error_count,
+            warning_count,
         );
 
         let editor_height = available.y - status_height;
         let visible_lines = ((editor_height / line_height).ceil() as usize).max(1);
 
+        // Diagnostic gutter width (always reserve space to avoid layout shift)
+        let diag_gutter_width = char_width * 3.0;
+
         // Dynamic gutter width based on line number mode
         let (gutter_width, text_x) = if line_number_mode == LineNumberMode::Off {
-            (0.0_f32, rect.min.x + 4.0)
+            (0.0_f32, rect.min.x + diag_gutter_width + 4.0)
         } else {
-            // At least 3 chars wide; grow with total line count
             let max_line = buffer.line_count();
             let digits = max_line.to_string().len().max(3);
-            // Add 1 char of left padding (rect.min.x + char_width) and 1 char of right padding
             let width = (digits + 2) as f32 * char_width;
-            (width, rect.min.x + width + 4.0)
+            (width, rect.min.x + diag_gutter_width + width + 4.0)
         };
 
         let end_line = (self.scroll_offset + visible_lines).min(buffer.line_count());
@@ -81,10 +98,25 @@ impl EditorView {
             let line_str = line_slice.to_string();
             let display = line_str.trim_end_matches('\n');
 
+            // Diagnostic gutter icon
+            if let Some(severity) = line_max_severity(diagnostics, i) {
+                let (icon, color) = if severity == DiagnosticSeverity::ERROR {
+                    ("\u{25cf}", theme.error_fg) // filled circle
+                } else {
+                    ("\u{25b2}", theme.warning_fg) // triangle
+                };
+                painter.text(
+                    egui::pos2(rect.min.x + 2.0, y),
+                    egui::Align2::LEFT_TOP,
+                    icon,
+                    font_id.clone(),
+                    color,
+                );
+            }
+
             // Line number (skip entirely when Off)
             if line_number_mode != LineNumberMode::Off {
                 let raw = format_line_number(line_number_mode, i, buffer.cursor_line());
-                // Right-align within the gutter (leave 1 char right padding)
                 let gutter_chars = (gutter_width / char_width).floor() as usize;
                 let padded = format!("{:>width$}", raw, width = gutter_chars.saturating_sub(1));
                 let num_color = if i == buffer.cursor_line() {
@@ -93,7 +125,7 @@ impl EditorView {
                     theme.line_number
                 };
                 painter.text(
-                    egui::pos2(rect.min.x, y),
+                    egui::pos2(rect.min.x + diag_gutter_width, y),
                     egui::Align2::LEFT_TOP,
                     &padded,
                     font_id.clone(),
@@ -155,6 +187,75 @@ impl EditorView {
                     Vec2::new(sel_x_end - sel_x_start, line_height),
                 );
                 painter.rect_filled(sel_rect, 0.0, theme.selection);
+            }
+
+            // Diagnostic underlines (drawn before text, after selection)
+            for diag in diagnostics
+                .iter()
+                .filter(|d| d.start_line <= i && d.end_line >= i)
+            {
+                let col_start = if i == diag.start_line {
+                    diag.start_col
+                } else {
+                    0
+                };
+                let col_end = if i == diag.end_line {
+                    diag.end_col
+                } else {
+                    display.chars().count()
+                };
+                if col_start >= col_end {
+                    continue;
+                }
+
+                let underline_color = if diag.severity == DiagnosticSeverity::ERROR {
+                    theme.error_underline
+                } else {
+                    theme.warning_underline
+                };
+
+                let x_start = if col_start == 0 {
+                    0.0
+                } else {
+                    let prefix: String = display.chars().take(col_start).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+                let x_end = {
+                    let prefix: String = display.chars().take(col_end).collect();
+                    painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width()
+                };
+
+                // Draw wavy underline as small segments
+                let underline_y = y + line_height - 2.0;
+                let wave_height = 2.0;
+                let wave_period = 4.0;
+                let mut wx = text_x + x_start;
+                let end_wx = text_x + x_end;
+                while wx < end_wx {
+                    let next_wx = (wx + wave_period).min(end_wx);
+                    let mid = (wx + next_wx) / 2.0;
+                    let peak = underline_y
+                        + if ((wx - text_x) / wave_period) as i32 % 2 == 0 {
+                            -wave_height
+                        } else {
+                            wave_height
+                        };
+                    painter.line_segment(
+                        [egui::pos2(wx, underline_y), egui::pos2(mid, peak)],
+                        egui::Stroke::new(1.0, underline_color),
+                    );
+                    painter.line_segment(
+                        [egui::pos2(mid, peak), egui::pos2(next_wx, underline_y)],
+                        egui::Stroke::new(1.0, underline_color),
+                    );
+                    wx = next_wx;
+                }
             }
 
             // Text content — with syntax highlighting if available
@@ -314,6 +415,22 @@ impl EditorView {
             }
         }
 
+        // Completion popup
+        if let Some(ref completion) = lsp_manager.completion {
+            self.render_completion_popup(
+                &painter,
+                completion,
+                theme,
+                &font_id,
+                text_x,
+                rect,
+                line_height,
+                char_width,
+                buffer.cursor_line(),
+                buffer.cursor_col(),
+            );
+        }
+
         // Scroll follow
         if buffer.cursor_line() < self.scroll_offset {
             self.scroll_offset = buffer.cursor_line();
@@ -321,4 +438,117 @@ impl EditorView {
             self.scroll_offset = buffer.cursor_line() - visible_lines + 1;
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_completion_popup(
+        &self,
+        painter: &egui::Painter,
+        completion: &CompletionState,
+        theme: &Theme,
+        font_id: &egui::FontId,
+        text_x: f32,
+        editor_rect: Rect,
+        line_height: f32,
+        char_width: f32,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) {
+        let filtered = completion.filtered_items();
+        if filtered.is_empty() {
+            return;
+        }
+
+        let max_visible = 10.min(filtered.len());
+        let popup_height = max_visible as f32 * line_height + 4.0;
+        let popup_width = 300.0_f32.min(editor_rect.width() * 0.6);
+
+        // Position: below cursor if room, above if near bottom
+        let cursor_screen_line = cursor_line.saturating_sub(self.scroll_offset);
+        let cursor_y = editor_rect.min.y + cursor_screen_line as f32 * line_height;
+        let cursor_x = text_x + cursor_col as f32 * char_width;
+
+        let below_y = cursor_y + line_height;
+        let popup_y = if below_y + popup_height < editor_rect.max.y - line_height * 2.0 {
+            below_y
+        } else {
+            cursor_y - popup_height
+        };
+
+        let popup_x = cursor_x.min(editor_rect.max.x - popup_width);
+        let popup_rect = Rect::from_min_size(
+            egui::pos2(popup_x, popup_y),
+            Vec2::new(popup_width, popup_height),
+        );
+
+        // Background
+        painter.rect_filled(popup_rect, 4.0, theme.status_bar_bg);
+        painter.rect_stroke(
+            popup_rect,
+            4.0,
+            egui::Stroke::new(1.0, theme.line_number),
+            egui::StrokeKind::Outside,
+        );
+
+        // Items
+        let scroll_start = if completion.selected >= max_visible {
+            completion.selected - max_visible + 1
+        } else {
+            0
+        };
+
+        for (vi, idx) in (scroll_start..scroll_start + max_visible).enumerate() {
+            if idx >= filtered.len() {
+                break;
+            }
+            let item = filtered[idx];
+            let item_y = popup_rect.min.y + 2.0 + vi as f32 * line_height;
+            let is_selected = idx == completion.selected;
+
+            if is_selected {
+                let sel_rect = Rect::from_min_size(
+                    egui::pos2(popup_rect.min.x + 1.0, item_y),
+                    Vec2::new(popup_width - 2.0, line_height),
+                );
+                painter.rect_filled(sel_rect, 2.0, theme.selection);
+            }
+
+            // Kind icon
+            let kind_text = item.kind.map(|k| k.icon()).unwrap_or("  ");
+            painter.text(
+                egui::pos2(popup_rect.min.x + 4.0, item_y),
+                egui::Align2::LEFT_TOP,
+                kind_text,
+                font_id.clone(),
+                theme.syntax.keyword,
+            );
+
+            // Label
+            painter.text(
+                egui::pos2(popup_rect.min.x + 4.0 + char_width * 3.0, item_y),
+                egui::Align2::LEFT_TOP,
+                &item.label,
+                font_id.clone(),
+                theme.foreground,
+            );
+        }
+    }
+}
+
+/// Find the maximum severity diagnostic on a given line.
+fn line_max_severity(diagnostics: &[NyxDiagnostic], line: usize) -> Option<DiagnosticSeverity> {
+    let mut max: Option<DiagnosticSeverity> = None;
+    for d in diagnostics {
+        if d.start_line <= line && d.end_line >= line {
+            match max {
+                None => max = Some(d.severity),
+                Some(current) => {
+                    // Lower number = higher severity (ERROR=1 > WARNING=2)
+                    if d.severity.0 < current.0 {
+                        max = Some(d.severity);
+                    }
+                }
+            }
+        }
+    }
+    max
 }

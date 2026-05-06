@@ -12,55 +12,50 @@ Full design spec: [docs/superpowers/specs/2026-05-04-nyx-editor-design.md](docs/
 
 ---
 
-## Phase 1: Foundation
+## Phase 1: Foundation ✓
 
 The bare minimum — a window that opens, renders text, and responds to vim keybindings.
 
-- [ ] Project scaffolding (Cargo workspace, egui setup, CI)
-- [ ] Window management and GPU rendering pipeline
-- [ ] Rope-based TextBuffer with undo/redo
-- [ ] Basic rendering (monospace text, cursor, line numbers)
-- [ ] VimEngine: Normal, Insert, Command modes
-- [ ] Basic motions (h/j/k/l, w/b/e, 0/$, gg/G)
-- [ ] Basic operators (d, c, y, p) with motions
-- [ ] File open/save
-- [ ] Config system (`~/.config/nyx/config.json` read/write)
-- [ ] Default dark theme (hardcoded initially)
+- [x] Project scaffolding (Cargo workspace, egui setup, CI)
+- [x] Window management and GPU rendering pipeline
+- [x] Rope-based TextBuffer with undo/redo
+- [x] Basic rendering (monospace text, cursor, line numbers)
+- [x] VimEngine: Normal, Insert, Command modes
+- [x] Basic motions (h/j/k/l, w/b/e, 0/$, gg/G)
+- [x] Basic operators (d, c, y, p) with motions
+- [x] File open/save
+- [x] Config system (`~/.config/nyx/config.json` read/write)
+- [x] Default dark theme (hardcoded initially)
 
-## Phase 2: Full Vim & Config
+## Phase 2: Core Vim Editing ✓
 
-Complete vim emulation and the full config system.
+Core vim editing features and text objects.
 
-- [ ] VimEngine: Visual, Visual-Line, Visual-Block, Replace modes
-- [ ] Registers, macros, marks, dot-repeat
-- [ ] Ex-commands (`:s`, `:g`, `:w`, `:q`, etc.)
-- [ ] Text objects (`iw`, `aw`, `i"`, `a(`, etc.)
-- [ ] KeyMapper with configurable keybindings (`keybindings.json`)
-- [ ] Theme system (`~/.config/nyx/themes/`)
-- [ ] Config live-reload
-- [ ] Action system (named actions, `chain` support)
+- [x] Register system (unnamed, named, system clipboard)
+- [x] Text objects (`iw`, `aw`, `i"`, `a(`, etc.)
+- [x] Visual mode and Visual-Line mode
+- [x] Dot-repeat
+- [x] Basic search (`/`, `n`, `N`)
 
-## Phase 3: Module System & Panels
+## Phase 3: Editor Polish ✓
 
-The panel layout and module infrastructure.
+Syntax highlighting, indentation, and editor UX.
 
-- [ ] NyxModule trait and ModuleRegistry
-- [ ] Panel system (left, bottom, right) with toggle behavior
-- [ ] Panel focus navigation (`Cmd+h/j/k/l`)
-- [ ] Panel resize via keyboard
-- [ ] Tab support for multiple modules in same panel
-- [ ] Filetree module
-- [ ] Command palette (`Cmd+K`)
+- [x] Relative line numbers
+- [x] Tree-sitter syntax highlighting (29 languages)
+- [x] Simple keyword-based highlighting fallback (SQL, Dockerfile)
+- [x] Auto-indent (tree-sitter aware + copy-indent fallback)
+- [x] Auto-indent after `:` (Python)
+- [x] Smart backspace (dedent full tab-width)
+- [x] Tab key support in insert mode
 
-## Phase 4: Core Modules
+## Phase 4: Config GUI & Keybindings ✓
 
-Built-in modules that make it a usable editor.
+Settings UI and keybindings cheatsheet.
 
-- [ ] Terminal module (PTY-based)
-- [ ] Git module (status, stage, commit, diff)
-- [ ] Search module (fuzzy filename + content search)
-- [ ] Settings GUI module (`Cmd+,`)
-- [ ] Inline git diff (gutter markers)
+- [x] AppView enum and view switching system
+- [x] Settings GUI module (`Cmd+,`) with auto-save
+- [x] Searchable keybindings cheatsheet (`Cmd+K`)
 
 ## Phase 5: LSP Integration
 
@@ -77,7 +72,21 @@ Language intelligence.
 - [ ] LSP settings passthrough
 - [ ] LSP download/install support
 
-## Phase 6: Polish & Package Manager
+## Phase 6: Modules & Panels
+
+Module infrastructure and built-in modules.
+
+- [ ] NyxModule trait and ModuleRegistry
+- [ ] Panel system (left, bottom, right) with toggle behavior
+- [ ] Panel focus navigation and resize via keyboard
+- [ ] Filetree module
+- [ ] Command palette (`Cmd+K`)
+- [ ] Terminal module (PTY-based)
+- [ ] Git module (status, stage, commit, diff)
+- [ ] Search module (fuzzy filename + content search)
+- [ ] Inline git diff (gutter markers)
+
+## Phase 7: Polish & Packaging
 
 - [ ] Built-in package manager for LSP servers
 - [ ] Config import/export
@@ -99,4 +108,7 @@ Language intelligence.
 
 ## Completed Work
 
-_Nothing yet — project just started._
+- Phase 1: Foundation (PR #1)
+- Phase 2: Core Vim Editing (PR #2)
+- Phase 3: Editor Polish (PR #3)
+- Phase 4: Config GUI & Keybindings (PR #4)
