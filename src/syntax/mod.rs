@@ -68,7 +68,9 @@ impl SyntaxState {
                 tree,
                 highlight_query,
             } => {
-                *tree = parser.parse(source, tree.as_ref());
+                // Always do a full reparse (pass None) since we don't track
+                // tree-sitter edit metadata for incremental parsing.
+                *tree = parser.parse(source, None);
                 self.cached_highlights.clear();
                 if let Some(ref t) = tree {
                     let mut cursor = tree_sitter::QueryCursor::new();

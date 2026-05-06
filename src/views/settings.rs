@@ -1,15 +1,25 @@
 use crate::config::NyxConfig;
+use crate::lsp::LspManager;
 use crate::renderer::Theme;
+use crate::views::lsp_servers::LspServersView;
 use eframe::egui;
 
 const FIELD_COUNT: usize = 6;
 const AVAILABLE_LANGUAGES: &[&str] = &["rust", "json", "python", "javascript", "typescript"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsTab {
+    #[default]
+    Editor,
+    LspServers,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsAction {
     None,
     Close,
     ConfigChanged,
+    ServerToggled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +77,7 @@ pub struct SettingsView {
     pub selected_row: usize,
     pub editing: Option<SettingsField>,
     pub edit_buffer: String,
+    pub active_tab: SettingsTab,
 }
 
 impl SettingsView {
@@ -75,12 +86,20 @@ impl SettingsView {
             selected_row: 0,
             editing: None,
             edit_buffer: String::new(),
+            active_tab: SettingsTab::default(),
         }
     }
 
     /// Render the settings fullscreen panel.
     /// Returns `true` if config was modified (caller should save).
-    pub fn render(&mut self, ctx: &egui::Context, config: &mut NyxConfig, theme: &Theme) -> bool {
+    pub fn render(
+        &mut self,
+        ctx: &egui::Context,
+        config: &mut NyxConfig,
+        theme: &Theme,
+        lsp_view: &LspServersView,
+        lsp_manager: &LspManager,
+    ) -> bool {
         let mut config_changed = false;
 
         egui::CentralPanel::default()
@@ -103,164 +122,220 @@ impl SettingsView {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(left_margin);
                         ui.label(
-                            egui::RichText::new("ESC to close")
+                            egui::RichText::new("ESC to close | Tab: switch tab")
                                 .color(theme.line_number)
                                 .size(12.0),
                         );
                     });
                 });
 
-                ui.add_space(16.0);
+                ui.add_space(12.0);
 
-                // EDITOR section header
+                // Tab bar
                 ui.horizontal(|ui| {
                     ui.add_space(left_margin);
-                    ui.label(
-                        egui::RichText::new("EDITOR")
-                            .color(theme.syntax.keyword)
-                            .size(11.0)
-                            .strong(),
-                    );
-                });
-
-                ui.add_space(8.0);
-
-                // Settings rows
-                for i in 0..FIELD_COUNT {
-                    let field = SettingsField::from_index(i).unwrap();
-                    let is_selected = i == self.selected_row;
-                    let is_editing = self.editing == Some(field);
-
-                    let row_bg = if is_selected {
-                        theme.selection
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
-
-                    // Row frame
-                    ui.horizontal(|ui| {
-                        ui.add_space(left_margin);
-
-                        let row_rect = egui::Rect::from_min_size(
-                            ui.cursor().min,
-                            egui::vec2(panel_width, 28.0),
-                        );
-                        ui.painter().rect_filled(row_rect, 4.0, row_bg);
-
-                        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
-                            ui.horizontal_centered(|ui| {
-                                ui.add_space(8.0);
-
-                                // Selection indicator
-                                if is_selected {
-                                    ui.label(
-                                        egui::RichText::new("\u{25b8}")
-                                            .color(theme.syntax.keyword)
-                                            .size(13.0),
-                                    );
-                                } else {
-                                    ui.add_space(12.0);
-                                }
-
-                                // Field label
-                                ui.label(
-                                    egui::RichText::new(field.label())
-                                        .color(theme.foreground)
-                                        .size(13.0),
-                                );
-
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.add_space(8.0);
-
-                                        if is_editing {
-                                            // Show edit buffer with cursor
-                                            let display = format!("{}|", self.edit_buffer);
-                                            ui.label(
-                                                egui::RichText::new(display)
-                                                    .color(theme.syntax.string)
-                                                    .monospace()
-                                                    .size(13.0),
-                                            );
-                                        } else {
-                                            // Display current value
-                                            let value_text = field.display_value(config);
-                                            let response = ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(&value_text)
-                                                        .color(theme.foreground)
-                                                        .size(13.0),
-                                                )
-                                                .sense(egui::Sense::click()),
-                                            );
-                                            if response.clicked() {
-                                                self.selected_row = i;
-                                                config_changed |=
-                                                    self.activate_field(field, config);
-                                            }
-                                        }
-                                    },
-                                );
-                            });
-                        });
-                    });
-
-                    ui.add_space(2.0);
-                }
-
-                // LANGUAGES section
-                ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(left_margin);
-                    ui.label(
-                        egui::RichText::new("LANGUAGES")
-                            .color(theme.syntax.keyword)
-                            .size(11.0)
-                            .strong(),
-                    );
-                });
-
-                ui.add_space(8.0);
-
-                ui.horizontal(|ui| {
-                    ui.add_space(left_margin + 8.0);
-                    for &lang in AVAILABLE_LANGUAGES {
-                        let enabled = config.languages.iter().any(|l| l == lang);
-                        let (text_color, bg_color) = if enabled {
-                            (theme.syntax.string, theme.selection)
+                    for (tab, label) in [
+                        (SettingsTab::Editor, "Editor"),
+                        (SettingsTab::LspServers, "LSP Servers"),
+                    ] {
+                        let is_active = self.active_tab == tab;
+                        let color = if is_active {
+                            theme.syntax.keyword
                         } else {
-                            (theme.line_number, egui::Color32::TRANSPARENT)
+                            theme.line_number
                         };
-
-                        let label_text = if enabled {
-                            format!("{} \u{2713}", lang)
-                        } else {
-                            lang.to_string()
-                        };
-
-                        let response = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(label_text).color(text_color).size(12.0),
-                            )
-                            .fill(bg_color)
-                            .corner_radius(12.0)
-                            .stroke(egui::Stroke::new(1.0, theme.line_number)),
-                        );
-
-                        if response.clicked() {
-                            if enabled {
-                                config.languages.retain(|l| l != lang);
-                            } else {
-                                config.languages.push(lang.to_string());
-                            }
-                            config_changed = true;
+                        ui.label(egui::RichText::new(label).color(color).size(13.0).strong());
+                        if !is_active {
+                            // no underline for inactive
                         }
+                        ui.add_space(12.0);
                     }
                 });
+
+                // Underline for active tab
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(left_margin);
+                    let underline_width = match self.active_tab {
+                        SettingsTab::Editor => 42.0,
+                        SettingsTab::LspServers => 82.0,
+                    };
+                    let offset = match self.active_tab {
+                        SettingsTab::Editor => 0.0,
+                        SettingsTab::LspServers => 42.0 + 12.0 + 4.0, // "Editor" width + spacing
+                    };
+                    ui.add_space(offset);
+                    let rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(underline_width, 2.0),
+                    );
+                    ui.painter().rect_filled(rect, 0.0, theme.syntax.keyword);
+                    ui.allocate_space(egui::vec2(underline_width, 2.0));
+                });
+
+                ui.add_space(12.0);
+
+                // Tab content
+                match self.active_tab {
+                    SettingsTab::Editor => {
+                        self.render_editor_tab(
+                            ui,
+                            config,
+                            theme,
+                            panel_width,
+                            left_margin,
+                            &mut config_changed,
+                        );
+                    }
+                    SettingsTab::LspServers => {
+                        lsp_view.render_content(ui, lsp_manager, theme, panel_width, left_margin);
+                    }
+                }
             });
 
         config_changed
+    }
+
+    fn render_editor_tab(
+        &self,
+        ui: &mut egui::Ui,
+        config: &mut NyxConfig,
+        theme: &Theme,
+        panel_width: f32,
+        left_margin: f32,
+        config_changed: &mut bool,
+    ) {
+        // EDITOR section header
+        ui.horizontal(|ui| {
+            ui.add_space(left_margin);
+            ui.label(
+                egui::RichText::new("EDITOR")
+                    .color(theme.syntax.keyword)
+                    .size(11.0)
+                    .strong(),
+            );
+        });
+
+        ui.add_space(8.0);
+
+        // Settings rows
+        for i in 0..FIELD_COUNT {
+            let field = SettingsField::from_index(i).unwrap();
+            let is_selected = i == self.selected_row;
+            let is_editing = self.editing == Some(field);
+
+            let row_bg = if is_selected {
+                theme.selection
+            } else {
+                egui::Color32::TRANSPARENT
+            };
+
+            // Row frame
+            ui.horizontal(|ui| {
+                ui.add_space(left_margin);
+
+                let row_rect =
+                    egui::Rect::from_min_size(ui.cursor().min, egui::vec2(panel_width, 28.0));
+                ui.painter().rect_filled(row_rect, 4.0, row_bg);
+
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.add_space(8.0);
+
+                        // Selection indicator
+                        if is_selected {
+                            ui.label(
+                                egui::RichText::new("\u{25b8}")
+                                    .color(theme.syntax.keyword)
+                                    .size(13.0),
+                            );
+                        } else {
+                            ui.add_space(12.0);
+                        }
+
+                        // Field label
+                        ui.label(
+                            egui::RichText::new(field.label())
+                                .color(theme.foreground)
+                                .size(13.0),
+                        );
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(8.0);
+
+                            if is_editing {
+                                // Show edit buffer with cursor
+                                let display = format!("{}|", self.edit_buffer);
+                                ui.label(
+                                    egui::RichText::new(display)
+                                        .color(theme.syntax.string)
+                                        .monospace()
+                                        .size(13.0),
+                                );
+                            } else {
+                                // Display current value
+                                let value_text = field.display_value(config);
+                                ui.label(
+                                    egui::RichText::new(&value_text)
+                                        .color(theme.foreground)
+                                        .size(13.0),
+                                );
+                            }
+                        });
+                    });
+                });
+            });
+
+            ui.add_space(2.0);
+        }
+
+        // LANGUAGES section
+        ui.add_space(16.0);
+        ui.horizontal(|ui| {
+            ui.add_space(left_margin);
+            ui.label(
+                egui::RichText::new("LANGUAGES")
+                    .color(theme.syntax.keyword)
+                    .size(11.0)
+                    .strong(),
+            );
+        });
+
+        ui.add_space(8.0);
+
+        ui.horizontal(|ui| {
+            ui.add_space(left_margin + 8.0);
+            for &lang in AVAILABLE_LANGUAGES {
+                let enabled = config.languages.iter().any(|l| l == lang);
+                let (text_color, bg_color) = if enabled {
+                    (theme.syntax.string, theme.selection)
+                } else {
+                    (theme.line_number, egui::Color32::TRANSPARENT)
+                };
+
+                let label_text = if enabled {
+                    format!("{} \u{2713}", lang)
+                } else {
+                    lang.to_string()
+                };
+
+                let response = ui.add(
+                    egui::Button::new(egui::RichText::new(label_text).color(text_color).size(12.0))
+                        .fill(bg_color)
+                        .corner_radius(12.0)
+                        .stroke(egui::Stroke::new(1.0, theme.line_number)),
+                );
+
+                if response.clicked() {
+                    if enabled {
+                        config.languages.retain(|l| l != lang);
+                    } else {
+                        config.languages.push(lang.to_string());
+                    }
+                    *config_changed = true;
+                }
+            }
+        });
     }
 
     /// Commit the current edit buffer to the config.
@@ -301,7 +376,18 @@ impl SettingsView {
     }
 
     /// Handle keyboard input for the settings view.
-    pub fn handle_input(&mut self, ctx: &egui::Context, config: &mut NyxConfig) -> SettingsAction {
+    pub fn handle_input(
+        &mut self,
+        ctx: &egui::Context,
+        config: &mut NyxConfig,
+        lsp_view: &mut LspServersView,
+        lsp_manager: &mut LspManager,
+    ) -> SettingsAction {
+        // When on the LSP tab, delegate input to LspServersView
+        if self.active_tab == SettingsTab::LspServers {
+            return self.handle_lsp_tab_input(ctx, lsp_view, lsp_manager);
+        }
+
         let mut action = SettingsAction::None;
 
         ctx.input(|input| {
@@ -333,6 +419,21 @@ impl SettingsView {
                     action = SettingsAction::Close;
                     return;
                 }
+                // Tab switching
+                if input.key_pressed(egui::Key::Tab) {
+                    self.active_tab = match self.active_tab {
+                        SettingsTab::Editor => SettingsTab::LspServers,
+                        SettingsTab::LspServers => SettingsTab::Editor,
+                    };
+                    return;
+                }
+                if input.key_pressed(egui::Key::H) || input.key_pressed(egui::Key::L) {
+                    self.active_tab = match self.active_tab {
+                        SettingsTab::Editor => SettingsTab::LspServers,
+                        SettingsTab::LspServers => SettingsTab::Editor,
+                    };
+                    return;
+                }
                 if input.key_pressed(egui::Key::J) || input.key_pressed(egui::Key::ArrowDown) {
                     if self.selected_row < FIELD_COUNT - 1 {
                         self.selected_row += 1;
@@ -356,6 +457,33 @@ impl SettingsView {
         });
 
         action
+    }
+
+    /// Handle input when the LSP Servers tab is active.
+    fn handle_lsp_tab_input(
+        &mut self,
+        ctx: &egui::Context,
+        lsp_view: &mut LspServersView,
+        lsp_manager: &mut LspManager,
+    ) -> SettingsAction {
+        // Check for tab switching first (before delegating to LspServersView)
+        let mut tab_switch = false;
+        ctx.input(|input| {
+            if input.key_pressed(egui::Key::Tab) && !input.modifiers.shift {
+                tab_switch = true;
+            }
+        });
+        if tab_switch {
+            self.active_tab = SettingsTab::Editor;
+            return SettingsAction::None;
+        }
+
+        let lsp_action = lsp_view.handle_input(ctx, lsp_manager);
+        match lsp_action {
+            super::lsp_servers::LspViewAction::Close => SettingsAction::Close,
+            super::lsp_servers::LspViewAction::ServerToggled => SettingsAction::ServerToggled,
+            super::lsp_servers::LspViewAction::None => SettingsAction::None,
+        }
     }
 
     /// Activate a field for editing. For bool/enum fields, toggles immediately and returns true.
