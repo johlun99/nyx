@@ -237,11 +237,9 @@ impl eframe::App for NyxApp {
                     });
             }
             AppView::Settings => {
-                let changed = self.settings_view.render(
-                    ctx,
-                    &mut self.config,
-                    &self.theme,
-                );
+                let changed = self
+                    .settings_view
+                    .render(ctx, &mut self.config, &self.theme);
                 if changed {
                     self.editor.set_tab_size(self.config.editor.tab_size);
                     let _ = self.config.save(&NyxConfig::config_path());

@@ -320,8 +320,7 @@ impl NyxConfig {
         }
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        std::fs::write(path, json)
-            .map_err(|e| format!("Failed to write config: {}", e))?;
+        std::fs::write(path, json).map_err(|e| format!("Failed to write config: {}", e))?;
         Ok(())
     }
 }

@@ -268,16 +268,35 @@ mod tests {
     #[test]
     fn all_queries_compile() {
         let languages = [
-            ("rust", "rs"), ("json", "json"), ("python", "py"),
-            ("javascript", "js"), ("typescript", "ts"),
-            ("c", "c"), ("cpp", "cpp"), ("csharp", "cs"),
-            ("go", "go"), ("java", "java"), ("ruby", "rb"),
-            ("php", "php"), ("bash", "sh"), ("css", "css"),
-            ("html", "html"), ("toml", "toml"), ("yaml", "yml"),
-            ("markdown", "md"), ("lua", "lua"), ("swift", "swift"),
-            ("scala", "scala"), ("zig", "zig"), ("elixir", "ex"),
-            ("haskell", "hs"), ("r", "r"), ("dart", "dart"),
-            ("ocaml", "ml"), ("svelte", "svelte"), ("handlebars", "hbs"),
+            ("rust", "rs"),
+            ("json", "json"),
+            ("python", "py"),
+            ("javascript", "js"),
+            ("typescript", "ts"),
+            ("c", "c"),
+            ("cpp", "cpp"),
+            ("csharp", "cs"),
+            ("go", "go"),
+            ("java", "java"),
+            ("ruby", "rb"),
+            ("php", "php"),
+            ("bash", "sh"),
+            ("css", "css"),
+            ("html", "html"),
+            ("toml", "toml"),
+            ("yaml", "yml"),
+            ("markdown", "md"),
+            ("lua", "lua"),
+            ("swift", "swift"),
+            ("scala", "scala"),
+            ("zig", "zig"),
+            ("elixir", "ex"),
+            ("haskell", "hs"),
+            ("r", "r"),
+            ("dart", "dart"),
+            ("ocaml", "ml"),
+            ("svelte", "svelte"),
+            ("handlebars", "hbs"),
         ];
         let mut failed = Vec::new();
         for (lang, ext) in languages {
@@ -300,7 +319,11 @@ mod tests {
                 }
             }
         }
-        assert!(failed.is_empty(), "Failed languages:\n{}", failed.join("\n"));
+        assert!(
+            failed.is_empty(),
+            "Failed languages:\n{}",
+            failed.join("\n")
+        );
     }
 
     #[test]

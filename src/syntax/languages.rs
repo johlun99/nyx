@@ -149,15 +149,41 @@ mod tests {
     #[test]
     fn get_grammar_for_all_languages() {
         let languages = [
-            "rust", "json", "python", "javascript", "typescript",
-            "c", "cpp", "csharp", "go", "java", "ruby", "php",
-            "bash", "css", "html", "toml", "yaml", "markdown",
-            "lua", "swift", "scala", "zig", "elixir", "haskell",
-            "r", "dart", "ocaml",
-            "svelte", "handlebars",
+            "rust",
+            "json",
+            "python",
+            "javascript",
+            "typescript",
+            "c",
+            "cpp",
+            "csharp",
+            "go",
+            "java",
+            "ruby",
+            "php",
+            "bash",
+            "css",
+            "html",
+            "toml",
+            "yaml",
+            "markdown",
+            "lua",
+            "swift",
+            "scala",
+            "zig",
+            "elixir",
+            "haskell",
+            "r",
+            "dart",
+            "ocaml",
+            "svelte",
+            "handlebars",
         ];
         for lang in languages {
-            assert!(get_language_grammar(lang).is_some(), "Grammar missing for {lang}");
+            assert!(
+                get_language_grammar(lang).is_some(),
+                "Grammar missing for {lang}"
+            );
         }
     }
 

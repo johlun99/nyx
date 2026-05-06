@@ -52,7 +52,12 @@ impl SettingsField {
             Self::FontSize => format!("{}", config.editor.font_size),
             Self::LineNumbers => config.editor.line_numbers.label().to_string(),
             Self::TabSize => format!("{}", config.editor.tab_size),
-            Self::CursorBlink => if config.editor.cursor_blink { "on" } else { "off" }.to_string(),
+            Self::CursorBlink => if config.editor.cursor_blink {
+                "on"
+            } else {
+                "off"
+            }
+            .to_string(),
             Self::WordWrap => if config.editor.word_wrap { "on" } else { "off" }.to_string(),
         }
     }
@@ -191,7 +196,8 @@ impl SettingsView {
                                             );
                                             if response.clicked() {
                                                 self.selected_row = i;
-                                                config_changed |= self.activate_field(field, config);
+                                                config_changed |=
+                                                    self.activate_field(field, config);
                                             }
                                         }
                                     },
@@ -235,9 +241,7 @@ impl SettingsView {
 
                         let response = ui.add(
                             egui::Button::new(
-                                egui::RichText::new(label_text)
-                                    .color(text_color)
-                                    .size(12.0),
+                                egui::RichText::new(label_text).color(text_color).size(12.0),
                             )
                             .fill(bg_color)
                             .corner_radius(12.0)
@@ -301,11 +305,7 @@ impl SettingsView {
     }
 
     /// Handle keyboard input for the settings view.
-    pub fn handle_input(
-        &mut self,
-        ctx: &egui::Context,
-        config: &mut NyxConfig,
-    ) -> SettingsAction {
+    pub fn handle_input(&mut self, ctx: &egui::Context, config: &mut NyxConfig) -> SettingsAction {
         let mut action = SettingsAction::None;
 
         ctx.input(|input| {
@@ -337,17 +337,13 @@ impl SettingsView {
                     action = SettingsAction::Close;
                     return;
                 }
-                if input.key_pressed(egui::Key::J)
-                    || input.key_pressed(egui::Key::ArrowDown)
-                {
+                if input.key_pressed(egui::Key::J) || input.key_pressed(egui::Key::ArrowDown) {
                     if self.selected_row < FIELD_COUNT - 1 {
                         self.selected_row += 1;
                     }
                     return;
                 }
-                if input.key_pressed(egui::Key::K)
-                    || input.key_pressed(egui::Key::ArrowUp)
-                {
+                if input.key_pressed(egui::Key::K) || input.key_pressed(egui::Key::ArrowUp) {
                     if self.selected_row > 0 {
                         self.selected_row -= 1;
                     }
@@ -430,7 +426,10 @@ mod tests {
             "JetBrains Mono"
         );
         assert_eq!(SettingsField::FontSize.display_value(&config), "14");
-        assert_eq!(SettingsField::LineNumbers.display_value(&config), "relative");
+        assert_eq!(
+            SettingsField::LineNumbers.display_value(&config),
+            "relative"
+        );
         assert_eq!(SettingsField::TabSize.display_value(&config), "4");
         assert_eq!(SettingsField::CursorBlink.display_value(&config), "off");
         assert_eq!(SettingsField::WordWrap.display_value(&config), "off");

@@ -804,5 +804,4 @@ mod tests {
         assert_eq!(editor.buffer.cursor_line(), 1);
         assert_eq!(editor.buffer.cursor_col(), 4); // indented to match line above
     }
-
 }

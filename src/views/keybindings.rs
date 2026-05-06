@@ -23,48 +23,204 @@ impl KeybindingsView {
     fn all_entries() -> Vec<KeybindingEntry> {
         vec![
             // Navigation
-            KeybindingEntry { category: "Navigation", action: "Move left", key: "h" },
-            KeybindingEntry { category: "Navigation", action: "Move down", key: "j" },
-            KeybindingEntry { category: "Navigation", action: "Move up", key: "k" },
-            KeybindingEntry { category: "Navigation", action: "Move right", key: "l" },
-            KeybindingEntry { category: "Navigation", action: "Word forward", key: "w" },
-            KeybindingEntry { category: "Navigation", action: "Word backward", key: "b" },
-            KeybindingEntry { category: "Navigation", action: "Word end", key: "e" },
-            KeybindingEntry { category: "Navigation", action: "Line start", key: "0" },
-            KeybindingEntry { category: "Navigation", action: "Line end", key: "$" },
-            KeybindingEntry { category: "Navigation", action: "First non-blank", key: "^" },
-            KeybindingEntry { category: "Navigation", action: "File top", key: "gg" },
-            KeybindingEntry { category: "Navigation", action: "File bottom", key: "G" },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Move left",
+                key: "h",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Move down",
+                key: "j",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Move up",
+                key: "k",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Move right",
+                key: "l",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Word forward",
+                key: "w",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Word backward",
+                key: "b",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Word end",
+                key: "e",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Line start",
+                key: "0",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "Line end",
+                key: "$",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "First non-blank",
+                key: "^",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "File top",
+                key: "gg",
+            },
+            KeybindingEntry {
+                category: "Navigation",
+                action: "File bottom",
+                key: "G",
+            },
             // Editing
-            KeybindingEntry { category: "Editing", action: "Delete char", key: "x" },
-            KeybindingEntry { category: "Editing", action: "Delete line", key: "dd" },
-            KeybindingEntry { category: "Editing", action: "Change line", key: "cc" },
-            KeybindingEntry { category: "Editing", action: "Yank line", key: "yy" },
-            KeybindingEntry { category: "Editing", action: "Paste", key: "p" },
-            KeybindingEntry { category: "Editing", action: "Undo", key: "u" },
-            KeybindingEntry { category: "Editing", action: "Redo", key: "Ctrl+R" },
-            KeybindingEntry { category: "Editing", action: "Repeat last", key: "." },
-            KeybindingEntry { category: "Editing", action: "Search forward", key: "/" },
-            KeybindingEntry { category: "Editing", action: "Search backward", key: "?" },
-            KeybindingEntry { category: "Editing", action: "Next match", key: "n" },
-            KeybindingEntry { category: "Editing", action: "Previous match", key: "N" },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Delete char",
+                key: "x",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Delete line",
+                key: "dd",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Change line",
+                key: "cc",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Yank line",
+                key: "yy",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Paste",
+                key: "p",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Undo",
+                key: "u",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Redo",
+                key: "Ctrl+R",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Repeat last",
+                key: ".",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Search forward",
+                key: "/",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Search backward",
+                key: "?",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Next match",
+                key: "n",
+            },
+            KeybindingEntry {
+                category: "Editing",
+                action: "Previous match",
+                key: "N",
+            },
             // Modes
-            KeybindingEntry { category: "Modes", action: "Insert", key: "i" },
-            KeybindingEntry { category: "Modes", action: "Append", key: "a" },
-            KeybindingEntry { category: "Modes", action: "Append end of line", key: "A" },
-            KeybindingEntry { category: "Modes", action: "Insert first non-blank", key: "I" },
-            KeybindingEntry { category: "Modes", action: "Open below", key: "o" },
-            KeybindingEntry { category: "Modes", action: "Open above", key: "O" },
-            KeybindingEntry { category: "Modes", action: "Visual", key: "v" },
-            KeybindingEntry { category: "Modes", action: "Visual line", key: "V" },
-            KeybindingEntry { category: "Modes", action: "Visual block", key: "Ctrl+V" },
-            KeybindingEntry { category: "Modes", action: "Command", key: ":" },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Insert",
+                key: "i",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Append",
+                key: "a",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Append end of line",
+                key: "A",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Insert first non-blank",
+                key: "I",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Open below",
+                key: "o",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Open above",
+                key: "O",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Visual",
+                key: "v",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Visual line",
+                key: "V",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Visual block",
+                key: "Ctrl+V",
+            },
+            KeybindingEntry {
+                category: "Modes",
+                action: "Command",
+                key: ":",
+            },
             // App
-            KeybindingEntry { category: "App", action: "Settings", key: "\u{2318}," },
-            KeybindingEntry { category: "App", action: "Keybindings", key: "\u{2318}K" },
-            KeybindingEntry { category: "App", action: "Save", key: ":w" },
-            KeybindingEntry { category: "App", action: "Quit", key: ":q" },
-            KeybindingEntry { category: "App", action: "Force quit", key: ":q!" },
+            KeybindingEntry {
+                category: "App",
+                action: "Settings",
+                key: "\u{2318},",
+            },
+            KeybindingEntry {
+                category: "App",
+                action: "Keybindings",
+                key: "\u{2318}K",
+            },
+            KeybindingEntry {
+                category: "App",
+                action: "Save",
+                key: ":w",
+            },
+            KeybindingEntry {
+                category: "App",
+                action: "Quit",
+                key: ":q",
+            },
+            KeybindingEntry {
+                category: "App",
+                action: "Force quit",
+                key: ":q!",
+            },
         ]
     }
 
@@ -76,8 +232,7 @@ impl KeybindingsView {
         self.entries
             .iter()
             .filter(|e| {
-                e.action.to_lowercase().contains(&query)
-                    || e.key.to_lowercase().contains(&query)
+                e.action.to_lowercase().contains(&query) || e.key.to_lowercase().contains(&query)
             })
             .collect()
     }
@@ -128,17 +283,17 @@ impl KeybindingsView {
             .fixed_pos(screen.min)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                ui.painter().rect_filled(
-                    screen,
-                    0.0,
-                    egui::Color32::from_black_alpha(160),
-                );
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
             });
 
         // Overlay panel — centered with margin
         let margin = 40.0;
         let overlay_pos = egui::pos2(margin, margin);
-        let overlay_size = egui::vec2(screen.width() - margin * 2.0, screen.height() - margin * 2.0);
+        let overlay_size = egui::vec2(
+            screen.width() - margin * 2.0,
+            screen.height() - margin * 2.0,
+        );
 
         egui::Area::new(egui::Id::new("kb_overlay"))
             .fixed_pos(overlay_pos)
