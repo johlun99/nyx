@@ -231,6 +231,21 @@ impl KeybindingsView {
                 action: "Autocomplete",
                 key: "Ctrl+Space",
             },
+            KeybindingEntry {
+                category: "App",
+                action: "Toggle File Explorer",
+                key: "\u{2318}B",
+            },
+            KeybindingEntry {
+                category: "App",
+                action: "Command Palette",
+                key: "\u{2318}P",
+            },
+            KeybindingEntry {
+                category: "App",
+                action: "Focus File Explorer",
+                key: "Ctrl+H",
+            },
         ]
     }
 

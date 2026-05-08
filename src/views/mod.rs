@@ -13,3 +13,10 @@ pub enum AppView {
     Settings,
     Keybindings,
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PanelFocus {
+    #[default]
+    Editor,
+    LeftPanel,
+}

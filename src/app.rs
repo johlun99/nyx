@@ -3,10 +3,11 @@ use crate::config::lsp_config::LspConfig;
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::lsp::LspManager;
+use crate::modules::{CommandPalette, FiletreeModule, ModuleAction, PaletteAction};
 use crate::renderer::{EditorView, Theme};
 use crate::syntax::languages::language_for_extension;
 use crate::views::{
-    AppView, KeybindingsView, LspServersView, SettingsAction, SettingsTab, SettingsView,
+    AppView, KeybindingsView, LspServersView, PanelFocus, SettingsAction, SettingsTab, SettingsView,
 };
 use crate::vim::{Mode, VimAction, VisualKind};
 use eframe::egui;
@@ -37,6 +38,12 @@ pub struct NyxApp {
     last_completion_request: Option<Instant>,
     /// Last LSP error surfaced in editor status line
     last_lsp_error_shown: Option<String>,
+    /// Panel system
+    panel_focus: PanelFocus,
+    left_panel_visible: bool,
+    filetree: FiletreeModule,
+    command_palette: CommandPalette,
+    command_palette_open: bool,
 }
 
 impl NyxApp {
@@ -46,6 +53,15 @@ impl NyxApp {
 
         let lsp_config = LspConfig::load_or_create(&LspConfig::config_path());
         let lsp_manager = LspManager::new(lsp_config);
+
+        // Determine filetree root: parent dir of opened file, or cwd
+        let filetree_root = editor
+            .file_path
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).parent().map(|d| d.to_path_buf()))
+            .or_else(|| std::env::current_dir().ok());
+
+        let left_panel_visible = false;
 
         Self {
             editor,
@@ -61,10 +77,27 @@ impl NyxApp {
             last_typed_char: None,
             last_completion_request: None,
             last_lsp_error_shown: None,
+            panel_focus: PanelFocus::default(),
+            left_panel_visible,
+            filetree: FiletreeModule::new(filetree_root),
+            command_palette: CommandPalette::new(),
+            command_palette_open: false,
         }
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
+        // --- Command palette interception (highest priority) ---
+        if self.command_palette_open {
+            let (should_close, action) = self.command_palette.handle_input(ctx);
+            if should_close {
+                self.command_palette_open = false;
+                if action != PaletteAction::None {
+                    self.apply_palette_action(action);
+                }
+            }
+            return;
+        }
+
         // --- Completion input interception ---
         if self.lsp_manager.completion.is_some() && self.active_view == AppView::Editor {
             let has_visible_completion_items = self
@@ -186,7 +219,19 @@ impl NyxApp {
 
         // --- App-level shortcuts (work from any view) ---
         let mut view_switch: Option<AppView> = None;
+        let mut toggle_panel = false;
+        let mut toggle_palette = false;
+        let mut focus_left_panel = false;
         ctx.input(|input| {
+            if input.modifiers.ctrl && input.key_pressed(egui::Key::H) {
+                focus_left_panel = true;
+            }
+            if input.modifiers.command && input.key_pressed(egui::Key::B) {
+                toggle_panel = true;
+            }
+            if input.modifiers.command && input.key_pressed(egui::Key::P) {
+                toggle_palette = true;
+            }
             if input.modifiers.command && input.key_pressed(egui::Key::Comma) {
                 view_switch = Some(match self.active_view {
                     AppView::Settings => AppView::Editor,
@@ -210,6 +255,32 @@ impl NyxApp {
                 }
             }
         });
+        if toggle_panel {
+            self.left_panel_visible = !self.left_panel_visible;
+            if !self.left_panel_visible {
+                self.panel_focus = PanelFocus::Editor;
+            }
+            return;
+        }
+        if toggle_palette {
+            self.command_palette_open = !self.command_palette_open;
+            if self.command_palette_open {
+                self.command_palette.reset();
+            }
+            return;
+        }
+        if focus_left_panel && self.active_view == AppView::Editor {
+            if self.panel_focus == PanelFocus::LeftPanel {
+                // Already focused — hide panel
+                self.left_panel_visible = false;
+                self.panel_focus = PanelFocus::Editor;
+            } else {
+                // Open panel if hidden, then focus it
+                self.left_panel_visible = true;
+                self.panel_focus = PanelFocus::LeftPanel;
+            }
+            return;
+        }
         if let Some(new_view) = view_switch {
             if new_view == AppView::Keybindings {
                 self.keybindings_view.search.clear();
@@ -256,6 +327,28 @@ impl NyxApp {
                 return;
             }
             AppView::Editor => {}
+        }
+
+        // --- Left panel (filetree) input ---
+        if self.panel_focus == PanelFocus::LeftPanel && self.left_panel_visible {
+            // Escape returns focus to editor
+            let escape_pressed = ctx.input(|input| {
+                input.key_pressed(egui::Key::Escape)
+                    || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
+            });
+            if escape_pressed {
+                self.panel_focus = PanelFocus::Editor;
+                return;
+            }
+            let action = self.filetree.handle_input(ctx);
+            match action {
+                ModuleAction::OpenFile(path) => {
+                    self.open_file(&path);
+                    self.panel_focus = PanelFocus::Editor;
+                }
+                ModuleAction::None => {}
+            }
+            return;
         }
 
         // --- Editor input ---
@@ -647,6 +740,70 @@ impl NyxApp {
         }
     }
 
+    fn open_file(&mut self, path: &str) {
+        // Close old LSP document
+        if let Some(ref old_path) = self.editor.file_path {
+            self.lsp_manager.notify_document_close(old_path);
+        }
+
+        // Read file and replace buffer
+        let content = match crate::file_io::read_file(std::path::Path::new(path)) {
+            Ok(content) => content,
+            Err(e) => {
+                self.editor.status_message = Some(format!("Failed to open: {}", e));
+                return;
+            }
+        };
+        self.editor.buffer = crate::buffer::TextBuffer::from_text(&content);
+        self.editor.file_path = Some(path.to_string());
+        self.editor.mark_saved();
+
+        // Re-initialize syntax highlighting
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        self.editor.syntax_state = language_for_extension(ext).and_then(|lang_name| {
+            let mut state = crate::syntax::SyntaxState::new(lang_name, ext)?;
+            state.parse(&self.editor.buffer.text());
+            Some(state)
+        });
+
+        // Reset LSP state for new file
+        self.lsp_document_opened = false;
+        self.lsp_manager.dismiss_completion();
+        self.lsp_manager.dismiss_hover();
+
+        // Reset editor state
+        self.editor.key_parser.set_mode(Mode::Normal);
+        self.editor.status_message = Some(format!("Opened {}", path));
+    }
+
+    fn apply_palette_action(&mut self, action: PaletteAction) {
+        match action {
+            PaletteAction::None => {}
+            PaletteAction::ToggleFiletree => {
+                self.left_panel_visible = !self.left_panel_visible;
+                if !self.left_panel_visible {
+                    self.panel_focus = PanelFocus::Editor;
+                }
+            }
+            PaletteAction::OpenSettings => {
+                self.active_view = AppView::Settings;
+            }
+            PaletteAction::OpenKeybindings => {
+                self.keybindings_view.search.clear();
+                self.active_view = AppView::Keybindings;
+            }
+            PaletteAction::OpenLspServers => {
+                self.settings_view.active_tab = SettingsTab::LspServers;
+                self.lsp_view.search.clear();
+                self.lsp_view.selected_row = 0;
+                self.active_view = AppView::Settings;
+            }
+        }
+    }
+
     fn ensure_lsp_document_opened(&mut self) {
         if self.lsp_document_opened {
             return;
@@ -717,6 +874,24 @@ impl eframe::App for NyxApp {
             }
         }
 
+        // Left panel (filetree) — must be rendered before CentralPanel per egui rules
+        let mut panel_action = ModuleAction::None;
+        if self.active_view == AppView::Editor && self.left_panel_visible {
+            let panel_bg = self.theme.background;
+            let panel_focused = self.panel_focus == PanelFocus::LeftPanel;
+            egui::SidePanel::left("left_panel")
+                .default_width(220.0)
+                .width_range(150.0..=400.0)
+                .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
+                .show_animated(ctx, true, |ui| {
+                    panel_action = self.filetree.render(ui, &self.theme, panel_focused);
+                });
+        }
+        if let ModuleAction::OpenFile(path) = panel_action {
+            self.open_file(&path);
+            self.panel_focus = PanelFocus::Editor;
+        }
+
         match self.active_view {
             AppView::Editor => {
                 self.editor.ensure_syntax_parsed();
@@ -764,6 +939,11 @@ impl eframe::App for NyxApp {
                 // Overlay on top
                 self.keybindings_view.render(ctx, &self.theme);
             }
+        }
+
+        // Command palette overlay (rendered on top of everything)
+        if self.command_palette_open {
+            self.command_palette.render(ctx, &self.theme);
         }
     }
 }

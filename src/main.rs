@@ -5,6 +5,7 @@ mod config;
 mod editor;
 mod file_io;
 mod lsp;
+mod modules;
 mod renderer;
 mod syntax;
 mod views;
