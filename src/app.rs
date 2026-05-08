@@ -1,6 +1,6 @@
 // src/app.rs
 use crate::config::lsp_config::LspConfig;
-use crate::config::panels_config::PanelsConfig;
+use crate::config::panels_config::{PanelTab, PanelsConfig};
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::lsp::LspManager;
@@ -126,6 +126,42 @@ impl NyxApp {
         }
     }
 
+    fn render_panel_tab_bar(
+        ui: &mut egui::Ui,
+        tabs: &[PanelTab],
+        active_idx: usize,
+        theme: &Theme,
+    ) {
+        if tabs.len() <= 1 {
+            return;
+        }
+        ui.horizontal(|ui| {
+            for (i, tab) in tabs.iter().enumerate() {
+                let is_active = i == active_idx;
+                let label = format!(
+                    "{}: {}",
+                    i + 1,
+                    tab.modules
+                        .first()
+                        .map(|m| Self::capitalize(m))
+                        .unwrap_or_default()
+                );
+                let color = if is_active {
+                    theme.syntax.keyword
+                } else {
+                    theme.line_number
+                };
+                ui.label(egui::RichText::new(&label).color(color).size(11.0).strong());
+                ui.add_space(8.0);
+            }
+        });
+        let rect =
+            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 1.0));
+        ui.painter().rect_filled(rect, 0.0, theme.line_number);
+        ui.allocate_space(egui::vec2(ui.available_width(), 1.0));
+        ui.add_space(4.0);
+    }
+
     fn panel_visible(&self, slot: PanelSlot) -> bool {
         match slot {
             PanelSlot::Left => self.left_panel_visible,
@@ -166,8 +202,12 @@ impl NyxApp {
         slot_index: usize,
         focused: bool,
     ) -> ModuleAction {
-        let tabs = self.panels_config.tabs_for(slot);
         let active_tab_idx = self.panel_active_tab[slot_index];
+        {
+            let tabs = self.panels_config.tabs_for(slot);
+            Self::render_panel_tab_bar(ui, tabs, active_tab_idx, &self.theme);
+        }
+        let tabs = self.panels_config.tabs_for(slot);
         if let Some(tab) = tabs.get(active_tab_idx).or_else(|| tabs.first()) {
             for module in &tab.modules.clone() {
                 match module.as_str() {
@@ -458,6 +498,38 @@ impl NyxApp {
                 });
                 if escape_pressed {
                     self.panel_focus = PanelFocus::Editor;
+                    return;
+                }
+                // Number key (1-9) tab switching
+                let slot_idx_for_switch = match slot {
+                    PanelSlot::Left => 0,
+                    PanelSlot::Bottom => 1,
+                    PanelSlot::Right => 2,
+                };
+                let tab_switch = ctx.input(|input| {
+                    for n in 1..=9u8 {
+                        let key = match n {
+                            1 => egui::Key::Num1,
+                            2 => egui::Key::Num2,
+                            3 => egui::Key::Num3,
+                            4 => egui::Key::Num4,
+                            5 => egui::Key::Num5,
+                            6 => egui::Key::Num6,
+                            7 => egui::Key::Num7,
+                            8 => egui::Key::Num8,
+                            9 => egui::Key::Num9,
+                            _ => unreachable!(),
+                        };
+                        if input.key_pressed(key) {
+                            return Some((n - 1) as usize);
+                        }
+                    }
+                    None
+                });
+                if let Some(idx) = tab_switch {
+                    if idx < self.panels_config.tabs_for(slot).len() {
+                        self.panel_active_tab[slot_idx_for_switch] = idx;
+                    }
                     return;
                 }
                 // Route input to modules in the focused panel
