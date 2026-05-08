@@ -27,6 +27,9 @@ pub enum VimAction {
     EnterSearch(SearchDirection),
     SearchNext,
     SearchPrev,
+    LspGotoDefinition,
+    LspReferences,
+    LspHover,
     Noop,
 }
 

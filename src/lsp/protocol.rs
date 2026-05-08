@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// LSP Position — 0-based line and UTF-16 character offset.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -157,6 +158,109 @@ impl CompletionResponse {
     }
 }
 
+/// LSP Location (used in definition/references responses).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Location {
+    pub uri: String,
+    pub range: Range,
+}
+
+/// LSP Hover response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Hover {
+    pub contents: HoverContents,
+}
+
+/// Hover contents: can be a string, MarkupContent, or array.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum HoverContents {
+    Scalar(MarkedString),
+    Array(Vec<MarkedString>),
+    Markup(MarkupContent),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+#[allow(dead_code)]
+pub enum MarkedString {
+    String(String),
+    LanguageValue { language: String, value: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct MarkupContent {
+    pub kind: String,
+    pub value: String,
+}
+
+impl Hover {
+    /// Extract plain text from any hover contents variant.
+    pub fn to_plain_text(&self) -> String {
+        match &self.contents {
+            HoverContents::Scalar(ms) => marked_string_text(ms),
+            HoverContents::Array(arr) => arr
+                .iter()
+                .map(marked_string_text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            HoverContents::Markup(mc) => mc.value.clone(),
+        }
+    }
+}
+
+fn marked_string_text(ms: &MarkedString) -> String {
+    match ms {
+        MarkedString::String(s) => s.clone(),
+        MarkedString::LanguageValue { value, .. } => value.clone(),
+    }
+}
+
+/// LSP TextEdit.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextEdit {
+    pub range: Range,
+    pub new_text: String,
+}
+
+/// LSP WorkspaceEdit (simplified: only document changes).
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkspaceEdit {
+    #[serde(default)]
+    pub changes: Option<HashMap<String, Vec<TextEdit>>>,
+}
+
+/// LSP CodeAction.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct CodeAction {
+    pub title: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub edit: Option<WorkspaceEdit>,
+}
+
+/// Definition response can be a single Location, an array, or null.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum DefinitionResponse {
+    Single(Location),
+    Array(Vec<Location>),
+}
+
+impl DefinitionResponse {
+    pub fn into_locations(self) -> Vec<Location> {
+        match self {
+            Self::Single(loc) => vec![loc],
+            Self::Array(locs) => locs,
+        }
+    }
+}
+
 /// TextDocumentSyncKind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextDocumentSyncKind {
@@ -181,6 +285,11 @@ impl TextDocumentSyncKind {
 pub struct ServerCapabilities {
     pub text_document_sync: TextDocumentSyncKind,
     pub completion_provider: bool,
+    pub definition_provider: bool,
+    pub references_provider: bool,
+    pub hover_provider: bool,
+    pub rename_provider: bool,
+    pub code_action_provider: bool,
 }
 
 impl ServerCapabilities {
@@ -200,10 +309,20 @@ impl ServerCapabilities {
             .unwrap_or(TextDocumentSyncKind::None);
 
         let completion = caps.get("completionProvider").is_some();
+        let definition = caps.get("definitionProvider").is_some();
+        let references = caps.get("referencesProvider").is_some();
+        let hover = caps.get("hoverProvider").is_some();
+        let rename = caps.get("renameProvider").is_some();
+        let code_action = caps.get("codeActionProvider").is_some();
 
         Self {
             text_document_sync: sync,
             completion_provider: completion,
+            definition_provider: definition,
+            references_provider: references,
+            hover_provider: hover,
+            rename_provider: rename,
+            code_action_provider: code_action,
         }
     }
 }

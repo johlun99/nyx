@@ -11,8 +11,8 @@ use crate::config::lsp_config::LspConfig;
 use crate::lsp::client::{spawn_client, LspClientHandle, LspRequest, LspResponse};
 use crate::lsp::download::{download_and_install, install_via_command, DownloadProgress};
 use crate::lsp::protocol::{
-    char_offset_to_lsp_position, lsp_position_to_char_offset, CompletionItem, Diagnostic,
-    DiagnosticSeverity, ServerCapabilities,
+    char_offset_to_lsp_position, lsp_position_to_char_offset, CodeAction, CompletionItem,
+    Diagnostic, DiagnosticSeverity, Position, Range, ServerCapabilities, TextEdit, WorkspaceEdit,
 };
 use crate::lsp::registry::{KnownServer, ServerRegistry, ServerStatus};
 use std::collections::{HashMap, HashSet};
@@ -82,11 +82,58 @@ pub struct NyxDiagnostic {
     pub message: String,
 }
 
+/// Hover popup state.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct HoverState {
+    pub text: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// A resolved goto location (file path, line, col — all 0-based).
+#[derive(Debug, Clone)]
+pub struct GotoLocation {
+    pub file_path: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Code action popup state.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct CodeActionState {
+    pub actions: Vec<CodeAction>,
+    pub selected: usize,
+    pub line: usize,
+    pub col: usize,
+}
+
+impl CodeActionState {
+    pub fn move_selection(&mut self, delta: i32) {
+        if self.actions.is_empty() {
+            return;
+        }
+        let new = self.selected as i32 + delta;
+        self.selected = if new < 0 {
+            0
+        } else if new >= self.actions.len() as i32 {
+            self.actions.len() - 1
+        } else {
+            new as usize
+        };
+    }
+}
+
 /// The main LSP manager, owned by NyxApp.
 pub struct LspManager {
     clients: HashMap<String, LspClientHandle>,
     pub diagnostics: HashMap<String, Vec<NyxDiagnostic>>,
     pub completion: Option<CompletionState>,
+    pub hover_result: Option<HoverState>,
+    pub goto_result: Option<Vec<GotoLocation>>,
+    pub code_actions: Option<CodeActionState>,
+    rename_result: Option<WorkspaceEdit>,
     pub lsp_config: LspConfig,
     /// Debounce: last document change time per URI
     pending_changes: HashMap<String, (Instant, String, i32)>,
@@ -106,6 +153,10 @@ impl LspManager {
             clients: HashMap::new(),
             diagnostics: HashMap::new(),
             completion: None,
+            hover_result: None,
+            goto_result: None,
+            code_actions: None,
+            rename_result: None,
             lsp_config,
             pending_changes: HashMap::new(),
             document_versions: HashMap::new(),
@@ -188,6 +239,45 @@ impl LspManager {
                         if let Some(ref mut state) = self.completion {
                             state.items = items;
                             state.selected = 0;
+                        }
+                    }
+                    LspResponse::Definition(locs) => {
+                        tracing::info!("LSP: received {} definition locations", locs.len());
+                        self.goto_result = Some(
+                            locs.into_iter()
+                                .map(|loc| resolve_location(&loc, &self.document_texts))
+                                .collect(),
+                        );
+                    }
+                    LspResponse::References(locs) => {
+                        tracing::info!("LSP: received {} reference locations", locs.len());
+                        self.goto_result = Some(
+                            locs.into_iter()
+                                .map(|loc| resolve_location(&loc, &self.document_texts))
+                                .collect(),
+                        );
+                    }
+                    LspResponse::HoverResult(hover) => {
+                        tracing::info!("LSP: received hover result");
+                        self.hover_result = hover.map(|h| HoverState {
+                            text: h.to_plain_text(),
+                            line: 0,
+                            col: 0,
+                        });
+                    }
+                    LspResponse::RenameResult(edit) => {
+                        tracing::info!("LSP: received rename result");
+                        self.rename_result = edit;
+                    }
+                    LspResponse::CodeActions(actions) => {
+                        tracing::info!("LSP: received {} code actions", actions.len());
+                        if !actions.is_empty() {
+                            self.code_actions = Some(CodeActionState {
+                                actions,
+                                selected: 0,
+                                line: 0,
+                                col: 0,
+                            });
                         }
                     }
                     LspResponse::ServerError(msg) => {
@@ -384,6 +474,178 @@ impl LspManager {
             state.anchor_col,
             state.anchor_col + state.filter_text.len(),
         ))
+    }
+
+    /// Request go-to-definition at cursor position.
+    pub fn request_goto_definition(
+        &mut self,
+        file_path: &str,
+        text: &str,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) {
+        let position = cursor_to_lsp_position(text, cursor_line, cursor_col);
+        let uri = path_to_uri(file_path);
+        self.goto_result = None;
+        self.send_to_capable_clients(file_path, text, |tx| {
+            let _ = tx.send(LspRequest::GotoDefinition {
+                uri: uri.clone(),
+                position,
+            });
+        });
+    }
+
+    /// Request references at cursor position.
+    pub fn request_references(
+        &mut self,
+        file_path: &str,
+        text: &str,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) {
+        let position = cursor_to_lsp_position(text, cursor_line, cursor_col);
+        let uri = path_to_uri(file_path);
+        self.goto_result = None;
+        self.send_to_capable_clients(file_path, text, |tx| {
+            let _ = tx.send(LspRequest::References {
+                uri: uri.clone(),
+                position,
+            });
+        });
+    }
+
+    /// Request hover at cursor position.
+    pub fn request_hover(
+        &mut self,
+        file_path: &str,
+        text: &str,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) {
+        let position = cursor_to_lsp_position(text, cursor_line, cursor_col);
+        let uri = path_to_uri(file_path);
+        self.hover_result = None;
+        self.send_to_capable_clients(file_path, text, |tx| {
+            let _ = tx.send(LspRequest::Hover {
+                uri: uri.clone(),
+                position,
+            });
+        });
+    }
+
+    /// Request rename at cursor position.
+    pub fn request_rename(
+        &mut self,
+        file_path: &str,
+        text: &str,
+        cursor_line: usize,
+        cursor_col: usize,
+        new_name: &str,
+    ) {
+        let position = cursor_to_lsp_position(text, cursor_line, cursor_col);
+        let uri = path_to_uri(file_path);
+        self.rename_result = None;
+        self.send_to_capable_clients(file_path, text, |tx| {
+            let _ = tx.send(LspRequest::Rename {
+                uri: uri.clone(),
+                position,
+                new_name: new_name.to_string(),
+            });
+        });
+    }
+
+    /// Request code actions at cursor position.
+    pub fn request_code_actions(
+        &mut self,
+        file_path: &str,
+        text: &str,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) {
+        let position = cursor_to_lsp_position(text, cursor_line, cursor_col);
+        let uri = path_to_uri(file_path);
+        let range = Range {
+            start: position,
+            end: position,
+        };
+        self.code_actions = None;
+        self.send_to_capable_clients(file_path, text, |tx| {
+            let _ = tx.send(LspRequest::CodeAction {
+                uri: uri.clone(),
+                range,
+            });
+        });
+    }
+
+    /// Dismiss the hover popup.
+    pub fn dismiss_hover(&mut self) {
+        self.hover_result = None;
+    }
+
+    /// Dismiss the code actions popup.
+    pub fn dismiss_code_actions(&mut self) {
+        self.code_actions = None;
+    }
+
+    /// Accept the currently selected code action. Returns its workspace edit if any.
+    pub fn accept_code_action(&mut self) -> Option<WorkspaceEdit> {
+        let state = self.code_actions.take()?;
+        let action = state.actions.into_iter().nth(state.selected)?;
+        action.edit
+    }
+
+    /// Take the pending rename result.
+    pub fn take_rename_result(&mut self) -> Option<WorkspaceEdit> {
+        self.rename_result.take()
+    }
+
+    /// Send a request to all running clients (simplified dispatch).
+    fn send_to_capable_clients(
+        &mut self,
+        file_path: &str,
+        text: &str,
+        send_fn: impl Fn(&crossbeam_channel::Sender<LspRequest>),
+    ) {
+        let ext = Path::new(file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if let Some(lang_id) = crate::syntax::languages::language_for_extension(ext) {
+            let _ = self.ensure_server_for_language(lang_id);
+        }
+
+        if self.clients.is_empty() {
+            return;
+        }
+
+        let uri = path_to_uri(file_path);
+        let language_id = Path::new(file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(crate::syntax::languages::language_for_extension)
+            .unwrap_or("plaintext")
+            .to_string();
+        let version = *self.document_versions.entry(uri.clone()).or_insert(1);
+
+        // Collect senders first to avoid borrow conflict with mark_document_open_for_server
+        let senders: Vec<(String, crossbeam_channel::Sender<LspRequest>)> = self
+            .clients
+            .iter()
+            .map(|(name, client)| (name.clone(), client.request_tx.clone()))
+            .collect();
+
+        for (server_name, tx) in senders {
+            if !self.is_document_open_for_server(&server_name, &uri) {
+                let _ = tx.send(LspRequest::DidOpen {
+                    uri: uri.clone(),
+                    language_id: language_id.clone(),
+                    version,
+                    text: text.to_string(),
+                });
+                self.mark_document_open_for_server(&server_name, &uri);
+            }
+            send_fn(&tx);
+        }
     }
 
     /// Start (or ensure running) the LSP server for a given language.
@@ -677,8 +939,82 @@ fn client_supports_completion(client: &LspClientHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// Convert cursor (line, col) to an LSP Position.
+fn cursor_to_lsp_position(text: &str, cursor_line: usize, cursor_col: usize) -> Position {
+    let char_offset = {
+        let mut offset = 0;
+        for (i, line) in text.lines().enumerate() {
+            if i == cursor_line {
+                offset += cursor_col;
+                break;
+            }
+            offset += line.chars().count() + 1; // +1 for \n
+        }
+        offset
+    };
+    char_offset_to_lsp_position(text, char_offset)
+}
+
+/// Resolve an LSP Location to a GotoLocation with char-based offsets.
+fn resolve_location(
+    loc: &crate::lsp::protocol::Location,
+    document_texts: &HashMap<String, String>,
+) -> GotoLocation {
+    let file_path = uri_to_path(&loc.uri);
+    // Try to resolve line/col from document text if available
+    let uri = normalize_uri(&loc.uri);
+    if let Some(text) = document_texts.get(&uri) {
+        let offset = lsp_position_to_char_offset(text, loc.range.start);
+        let (line, col) = offset_to_line_col(text, offset);
+        GotoLocation {
+            file_path,
+            line,
+            col,
+        }
+    } else {
+        // Fall back to LSP line/character (character is UTF-16, but close enough for display)
+        GotoLocation {
+            file_path,
+            line: loc.range.start.line as usize,
+            col: loc.range.start.character as usize,
+        }
+    }
+}
+
+/// Apply a workspace edit to a text buffer. Edits are applied in reverse order.
+pub fn apply_workspace_edit_to_text(text: &str, edits: &[TextEdit]) -> String {
+    let mut sorted: Vec<&TextEdit> = edits.iter().collect();
+    sorted.sort_by(|a, b| {
+        b.range
+            .start
+            .line
+            .cmp(&a.range.start.line)
+            .then(b.range.start.character.cmp(&a.range.start.character))
+    });
+
+    let mut result = text.to_string();
+    for te in sorted {
+        let start = lsp_position_to_char_offset(&result, te.range.start);
+        let end = lsp_position_to_char_offset(&result, te.range.end);
+        // Convert char offsets to byte offsets
+        let byte_start: usize = result.chars().take(start).map(|c| c.len_utf8()).sum();
+        let byte_end: usize = result.chars().take(end).map(|c| c.len_utf8()).sum();
+        result.replace_range(byte_start..byte_end, &te.new_text);
+    }
+    result
+}
+
+/// Extract the file path from a file:// URI.
+fn uri_to_path(uri: &str) -> String {
+    if let Some(path) = uri.strip_prefix("file://") {
+        percent_decode(path)
+    } else {
+        uri.to_string()
+    }
+}
+
 /// Convert a file path to a file:// URI.
-fn path_to_uri(path: &str) -> String {
+pub fn path_to_uri(path: &str) -> String {
     normalize_uri(path)
 }
 
