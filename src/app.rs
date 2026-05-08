@@ -12,6 +12,13 @@ use crate::vim::{Mode, VimAction, VisualKind};
 use eframe::egui;
 use std::time::{Duration, Instant};
 
+/// LSP actions triggered from vim keybindings, handled outside the input closure.
+enum LspAction {
+    GotoDefinition,
+    References,
+    Hover,
+}
+
 pub struct NyxApp {
     editor: Editor,
     editor_view: EditorView,
@@ -126,6 +133,57 @@ impl NyxApp {
             }
         }
 
+        // --- Code action popup interception ---
+        if self.lsp_manager.code_actions.is_some() && self.active_view == AppView::Editor {
+            let mut handled = false;
+            let mut accept_action = false;
+            ctx.input(|input| {
+                if input.key_pressed(egui::Key::Escape) {
+                    self.lsp_manager.dismiss_code_actions();
+                    handled = true;
+                    return;
+                }
+                if input.key_pressed(egui::Key::ArrowDown) || input.key_pressed(egui::Key::J) {
+                    if let Some(ref mut state) = self.lsp_manager.code_actions {
+                        state.move_selection(1);
+                    }
+                    handled = true;
+                    return;
+                }
+                if input.key_pressed(egui::Key::ArrowUp) || input.key_pressed(egui::Key::K) {
+                    if let Some(ref mut state) = self.lsp_manager.code_actions {
+                        state.move_selection(-1);
+                    }
+                    handled = true;
+                    return;
+                }
+                if input.key_pressed(egui::Key::Enter) {
+                    handled = true;
+                    accept_action = true;
+                }
+            });
+            if handled {
+                if accept_action {
+                    if let Some(edit) = self.lsp_manager.accept_code_action() {
+                        self.apply_workspace_edit(&edit);
+                        self.notify_lsp_change();
+                    }
+                }
+                return;
+            }
+        }
+
+        // --- Dismiss hover on any keypress ---
+        if self.lsp_manager.hover_result.is_some() && self.active_view == AppView::Editor {
+            let mut any_key = false;
+            ctx.input(|input| {
+                any_key = !input.events.is_empty();
+            });
+            if any_key {
+                self.lsp_manager.dismiss_hover();
+            }
+        }
+
         // --- App-level shortcuts (work from any view) ---
         let mut view_switch: Option<AppView> = None;
         ctx.input(|input| {
@@ -200,12 +258,17 @@ impl NyxApp {
             AppView::Editor => {}
         }
 
-        // --- Editor input (unchanged from here down) ---
+        // --- Editor input ---
+        let mut lsp_action: Option<LspAction> = None;
+        let mut rename_request: Option<String> = None;
         ctx.input(|input| {
             // Command mode intercepts all input
             if self.editor.mode() == Mode::Command {
                 if input.key_pressed(egui::Key::Enter) {
-                    self.editor.execute_command();
+                    if let Some(new_name) = self.editor.execute_command() {
+                        // :rename command was executed
+                        rename_request = Some(new_name);
+                    }
                     return;
                 }
                 if input.key_pressed(egui::Key::Backspace) {
@@ -283,6 +346,30 @@ impl NyxApp {
                 return;
             }
 
+            // Ctrl+O for jump back — only in Normal mode
+            if self.editor.mode() == Mode::Normal
+                && input.modifiers.ctrl
+                && input.key_pressed(egui::Key::O)
+            {
+                if let Some(pos) = self.editor.jump_list.go_back() {
+                    self.editor.buffer.set_cursor(pos.line, pos.col);
+                    self.editor.buffer.clamp_cursor_normal();
+                }
+                return;
+            }
+
+            // Ctrl+I for jump forward — only in Normal mode
+            if self.editor.mode() == Mode::Normal
+                && input.modifiers.ctrl
+                && input.key_pressed(egui::Key::I)
+            {
+                if let Some(pos) = self.editor.jump_list.go_forward() {
+                    self.editor.buffer.set_cursor(pos.line, pos.col);
+                    self.editor.buffer.clamp_cursor_normal();
+                }
+                return;
+            }
+
             // Ctrl+V for visual block mode — only in Normal mode
             if self.editor.mode() == Mode::Normal
                 && input.modifiers.ctrl
@@ -291,6 +378,15 @@ impl NyxApp {
                 self.editor.key_parser.set_mode(Mode::VisualBlock);
                 let action = VimAction::EnterVisual(VisualKind::Block);
                 self.editor.apply_action(action);
+                return;
+            }
+
+            // Ctrl+. for code actions — only in Normal mode
+            if self.editor.mode() == Mode::Normal
+                && input.modifiers.ctrl
+                && input.key_pressed(egui::Key::Period)
+            {
+                self.trigger_code_actions();
                 return;
             }
 
@@ -335,6 +431,19 @@ impl NyxApp {
                 if let egui::Event::Text(text) = event {
                     for ch in text.chars() {
                         let action = self.editor.key_parser.handle_key(ch);
+                        // Check for LSP actions before consuming
+                        match &action {
+                            VimAction::LspGotoDefinition => {
+                                lsp_action = Some(LspAction::GotoDefinition);
+                            }
+                            VimAction::LspReferences => {
+                                lsp_action = Some(LspAction::References);
+                            }
+                            VimAction::LspHover => {
+                                lsp_action = Some(LspAction::Hover);
+                            }
+                            _ => {}
+                        }
                         self.editor.apply_action(action);
 
                         // Auto-trigger completion on '.' or '::'
@@ -364,6 +473,17 @@ impl NyxApp {
                 }
             }
         });
+
+        // Handle LSP actions outside the input closure
+        match lsp_action {
+            Some(LspAction::GotoDefinition) => self.trigger_goto_definition(),
+            Some(LspAction::References) => self.trigger_references(),
+            Some(LspAction::Hover) => self.trigger_hover(),
+            None => {}
+        }
+        if let Some(new_name) = rename_request {
+            self.trigger_rename(&new_name);
+        }
     }
 
     fn trigger_completion(&mut self) {
@@ -393,6 +513,137 @@ impl NyxApp {
         if let Some(ref path) = self.editor.file_path {
             let text = self.editor.buffer.text();
             self.lsp_manager.notify_document_change(path, &text);
+        }
+    }
+
+    fn handle_goto_results(&mut self, locations: Vec<crate::lsp::GotoLocation>) {
+        if locations.is_empty() {
+            self.editor.status_message = Some("No results found".to_string());
+            return;
+        }
+
+        let current_path = self
+            .editor
+            .file_path
+            .as_deref()
+            .and_then(|p| std::fs::canonicalize(p).ok())
+            .unwrap_or_default();
+        let cursor_line = self.editor.buffer.cursor_line();
+        let cursor_col = self.editor.buffer.cursor_col();
+
+        // Partition into same-file and other-file locations
+        let is_same_file = |loc: &crate::lsp::GotoLocation| {
+            std::fs::canonicalize(&loc.file_path)
+                .unwrap_or_else(|_| std::path::PathBuf::from(&loc.file_path))
+                == current_path
+        };
+
+        // For same-file results, skip the one we're already on
+        let is_different_position =
+            |loc: &crate::lsp::GotoLocation| loc.line != cursor_line || loc.col != cursor_col;
+
+        // Try to find a same-file result that isn't the current position
+        let jump_target = locations
+            .iter()
+            .find(|l| is_same_file(l) && is_different_position(l));
+
+        if let Some(loc) = jump_target {
+            // Count same-file results for status message
+            let same_file_count = locations.iter().filter(|l| is_same_file(l)).count();
+            self.editor.jump_list.push(cursor_line, cursor_col);
+            self.editor.buffer.set_cursor(loc.line, loc.col);
+            self.editor.buffer.clamp_cursor_normal();
+            if same_file_count > 1 {
+                self.editor.status_message = Some(format!("[1/{}] results", same_file_count));
+            }
+        } else if locations.len() == 1 && is_same_file(&locations[0]) {
+            // Only result is where we already are
+            self.editor.status_message = Some("Already at the only result".to_string());
+        } else {
+            // All results are in other files — show the first one
+            let loc = locations
+                .iter()
+                .find(|l| !is_same_file(l))
+                .unwrap_or(&locations[0]);
+            self.editor.status_message = Some(format!(
+                "{}:{}:{} ({} results)",
+                loc.file_path,
+                loc.line + 1,
+                loc.col + 1,
+                locations.len()
+            ));
+        }
+    }
+
+    fn trigger_goto_definition(&mut self) {
+        if let Some(ref path) = self.editor.file_path {
+            let text = self.editor.buffer.text();
+            let line = self.editor.buffer.cursor_line();
+            let col = self.editor.buffer.cursor_col();
+            self.lsp_manager
+                .request_goto_definition(path, &text, line, col);
+        }
+    }
+
+    fn trigger_references(&mut self) {
+        if let Some(ref path) = self.editor.file_path {
+            let text = self.editor.buffer.text();
+            let line = self.editor.buffer.cursor_line();
+            let col = self.editor.buffer.cursor_col();
+            self.lsp_manager.request_references(path, &text, line, col);
+        }
+    }
+
+    fn trigger_hover(&mut self) {
+        if let Some(ref path) = self.editor.file_path {
+            let text = self.editor.buffer.text();
+            let line = self.editor.buffer.cursor_line();
+            let col = self.editor.buffer.cursor_col();
+            self.lsp_manager.request_hover(path, &text, line, col);
+        }
+    }
+
+    fn trigger_rename(&mut self, new_name: &str) {
+        if let Some(ref path) = self.editor.file_path {
+            let text = self.editor.buffer.text();
+            let line = self.editor.buffer.cursor_line();
+            let col = self.editor.buffer.cursor_col();
+            self.lsp_manager
+                .request_rename(path, &text, line, col, new_name);
+        }
+    }
+
+    fn trigger_code_actions(&mut self) {
+        if let Some(ref path) = self.editor.file_path {
+            let text = self.editor.buffer.text();
+            let line = self.editor.buffer.cursor_line();
+            let col = self.editor.buffer.cursor_col();
+            self.lsp_manager
+                .request_code_actions(path, &text, line, col);
+        }
+    }
+
+    fn apply_workspace_edit(&mut self, edit: &crate::lsp::protocol::WorkspaceEdit) {
+        let current_uri = self
+            .editor
+            .file_path
+            .as_deref()
+            .map(crate::lsp::path_to_uri);
+        if let Some(ref changes) = edit.changes {
+            if let Some(ref uri) = current_uri {
+                if let Some(edits) = changes.get(uri) {
+                    let text = self.editor.buffer.text();
+                    let new_text = crate::lsp::apply_workspace_edit_to_text(&text, edits);
+                    // Replace buffer contents while preserving cursor approximately
+                    let cursor_line = self.editor.buffer.cursor_line();
+                    let cursor_col = self.editor.buffer.cursor_col();
+                    let len = self.editor.buffer.len_chars();
+                    self.editor.buffer.delete_range(0, len);
+                    self.editor.buffer.insert_text_at(0, &new_text);
+                    self.editor.buffer.set_cursor(cursor_line, cursor_col);
+                    self.editor.buffer.clamp_cursor_normal();
+                }
+            }
         }
     }
 
@@ -439,6 +690,18 @@ impl eframe::App for NyxApp {
                 self.editor.status_message = Some(format!("LSP error: {}", err));
                 self.last_lsp_error_shown = Some(err);
             }
+        }
+
+        // Handle goto definition/references results
+        if let Some(locations) = self.lsp_manager.goto_result.take() {
+            self.handle_goto_results(locations);
+        }
+
+        // Handle rename results
+        if let Some(edit) = self.lsp_manager.take_rename_result() {
+            self.apply_workspace_edit(&edit);
+            self.notify_lsp_change();
+            self.editor.status_message = Some("Rename applied".to_string());
         }
 
         // Schedule gentle repaints so async LSP responses trigger UI updates

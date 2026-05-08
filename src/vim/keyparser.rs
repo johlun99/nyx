@@ -144,6 +144,9 @@ impl KeyParser {
             self.pending.clear();
             return match combined.as_str() {
                 "gg" => VimAction::Motion(MotionKind::FileTop),
+                "gd" => VimAction::LspGotoDefinition,
+                "gr" => VimAction::LspReferences,
+                "gh" => VimAction::LspHover,
                 "dd" => VimAction::Operator(OperatorAction::DeleteLine),
                 "cc" => {
                     self.mode = Mode::Insert;

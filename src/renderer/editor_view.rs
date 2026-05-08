@@ -1,7 +1,7 @@
 // src/renderer/editor_view.rs
 use crate::config::{format_line_number, LineNumberMode};
 use crate::editor::Editor;
-use crate::lsp::{CompletionState, LspManager, NyxDiagnostic};
+use crate::lsp::{CodeActionState, CompletionState, HoverState, LspManager, NyxDiagnostic};
 use crate::renderer::status_bar::StatusBar;
 use crate::renderer::theme::Theme;
 use crate::vim::mode::Mode;
@@ -431,6 +431,38 @@ impl EditorView {
             );
         }
 
+        // Hover popup
+        if let Some(ref hover) = lsp_manager.hover_result {
+            self.render_hover_popup(
+                &painter,
+                hover,
+                theme,
+                &font_id,
+                text_x,
+                rect,
+                line_height,
+                char_width,
+                buffer.cursor_line(),
+                buffer.cursor_col(),
+            );
+        }
+
+        // Code action popup
+        if let Some(ref actions) = lsp_manager.code_actions {
+            self.render_code_action_popup(
+                &painter,
+                actions,
+                theme,
+                &font_id,
+                text_x,
+                rect,
+                line_height,
+                char_width,
+                buffer.cursor_line(),
+                buffer.cursor_col(),
+            );
+        }
+
         // Scroll follow
         if buffer.cursor_line() < self.scroll_offset {
             self.scroll_offset = buffer.cursor_line();
@@ -527,6 +559,161 @@ impl EditorView {
                 egui::pos2(popup_rect.min.x + 4.0 + char_width * 3.0, item_y),
                 egui::Align2::LEFT_TOP,
                 &item.label,
+                font_id.clone(),
+                theme.foreground,
+            );
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn render_hover_popup(
+        &self,
+        painter: &egui::Painter,
+        hover: &HoverState,
+        theme: &Theme,
+        font_id: &egui::FontId,
+        text_x: f32,
+        editor_rect: Rect,
+        line_height: f32,
+        char_width: f32,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) {
+        if hover.text.is_empty() {
+            return;
+        }
+
+        // Limit to 5 lines
+        let lines: Vec<&str> = hover.text.lines().take(5).collect();
+        let truncated = hover.text.lines().count() > 5;
+        let line_count = lines.len() + if truncated { 1 } else { 0 };
+
+        let popup_height = line_count as f32 * line_height + 8.0;
+        let popup_width = 400.0_f32.min(editor_rect.width() * 0.7);
+
+        // Position above cursor
+        let cursor_screen_line = cursor_line.saturating_sub(self.scroll_offset);
+        let cursor_y = editor_rect.min.y + cursor_screen_line as f32 * line_height;
+        let cursor_x = text_x + cursor_col as f32 * char_width;
+
+        let popup_y = if cursor_y - popup_height > editor_rect.min.y {
+            cursor_y - popup_height
+        } else {
+            cursor_y + line_height
+        };
+        let popup_x = cursor_x.min(editor_rect.max.x - popup_width);
+
+        let popup_rect = Rect::from_min_size(
+            egui::pos2(popup_x, popup_y),
+            Vec2::new(popup_width, popup_height),
+        );
+
+        painter.rect_filled(popup_rect, 4.0, theme.status_bar_bg);
+        painter.rect_stroke(
+            popup_rect,
+            4.0,
+            egui::Stroke::new(1.0, theme.line_number),
+            egui::StrokeKind::Outside,
+        );
+
+        for (i, line) in lines.iter().enumerate() {
+            painter.text(
+                egui::pos2(
+                    popup_rect.min.x + 6.0,
+                    popup_rect.min.y + 4.0 + i as f32 * line_height,
+                ),
+                egui::Align2::LEFT_TOP,
+                line,
+                font_id.clone(),
+                theme.foreground,
+            );
+        }
+        if truncated {
+            painter.text(
+                egui::pos2(
+                    popup_rect.min.x + 6.0,
+                    popup_rect.min.y + 4.0 + lines.len() as f32 * line_height,
+                ),
+                egui::Align2::LEFT_TOP,
+                "...",
+                font_id.clone(),
+                theme.line_number,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_code_action_popup(
+        &self,
+        painter: &egui::Painter,
+        actions: &CodeActionState,
+        theme: &Theme,
+        font_id: &egui::FontId,
+        text_x: f32,
+        editor_rect: Rect,
+        line_height: f32,
+        char_width: f32,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) {
+        if actions.actions.is_empty() {
+            return;
+        }
+
+        let max_visible = 8.min(actions.actions.len());
+        let popup_height = max_visible as f32 * line_height + 4.0;
+        let popup_width = 350.0_f32.min(editor_rect.width() * 0.6);
+
+        let cursor_screen_line = cursor_line.saturating_sub(self.scroll_offset);
+        let cursor_y = editor_rect.min.y + cursor_screen_line as f32 * line_height;
+        let cursor_x = text_x + cursor_col as f32 * char_width;
+
+        let below_y = cursor_y + line_height;
+        let popup_y = if below_y + popup_height < editor_rect.max.y - line_height * 2.0 {
+            below_y
+        } else {
+            cursor_y - popup_height
+        };
+        let popup_x = cursor_x.min(editor_rect.max.x - popup_width);
+
+        let popup_rect = Rect::from_min_size(
+            egui::pos2(popup_x, popup_y),
+            Vec2::new(popup_width, popup_height),
+        );
+
+        painter.rect_filled(popup_rect, 4.0, theme.status_bar_bg);
+        painter.rect_stroke(
+            popup_rect,
+            4.0,
+            egui::Stroke::new(1.0, theme.line_number),
+            egui::StrokeKind::Outside,
+        );
+
+        let scroll_start = if actions.selected >= max_visible {
+            actions.selected - max_visible + 1
+        } else {
+            0
+        };
+
+        for (vi, idx) in (scroll_start..scroll_start + max_visible).enumerate() {
+            if idx >= actions.actions.len() {
+                break;
+            }
+            let action = &actions.actions[idx];
+            let item_y = popup_rect.min.y + 2.0 + vi as f32 * line_height;
+            let is_selected = idx == actions.selected;
+
+            if is_selected {
+                let sel_rect = Rect::from_min_size(
+                    egui::pos2(popup_rect.min.x + 1.0, item_y),
+                    Vec2::new(popup_width - 2.0, line_height),
+                );
+                painter.rect_filled(sel_rect, 2.0, theme.selection);
+            }
+
+            painter.text(
+                egui::pos2(popup_rect.min.x + 6.0, item_y),
+                egui::Align2::LEFT_TOP,
+                &action.title,
                 font_id.clone(),
                 theme.foreground,
             );

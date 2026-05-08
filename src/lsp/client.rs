@@ -2,16 +2,18 @@
 //! LSP client: spawns a language server process and communicates via JSON-RPC.
 
 use crate::lsp::protocol::{
-    CompletionItem, CompletionResponse, Diagnostic, Position, ServerCapabilities,
-    TextDocumentIdentifier, TextDocumentItem, VersionedTextDocumentIdentifier,
+    CodeAction, CompletionItem, CompletionResponse, DefinitionResponse, Diagnostic, Hover,
+    Location, Position, Range, ServerCapabilities, TextDocumentIdentifier, TextDocumentItem,
+    VersionedTextDocumentIdentifier, WorkspaceEdit,
 };
 use crate::lsp::transport::{read_message, write_message};
 use crossbeam_channel::{Receiver, Sender};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Requests sent from the UI thread to the background thread.
 #[derive(Debug)]
@@ -39,6 +41,27 @@ pub enum LspRequest {
         uri: String,
         position: Position,
     },
+    GotoDefinition {
+        uri: String,
+        position: Position,
+    },
+    References {
+        uri: String,
+        position: Position,
+    },
+    Hover {
+        uri: String,
+        position: Position,
+    },
+    Rename {
+        uri: String,
+        position: Position,
+        new_name: String,
+    },
+    CodeAction {
+        uri: String,
+        range: Range,
+    },
     Shutdown,
 }
 
@@ -51,6 +74,11 @@ pub enum LspResponse {
         diagnostics: Vec<Diagnostic>,
     },
     Completions(Vec<CompletionItem>),
+    Definition(Vec<Location>),
+    References(Vec<Location>),
+    HoverResult(Option<Hover>),
+    RenameResult(Option<WorkspaceEdit>),
+    CodeActions(Vec<CodeAction>),
     ServerError(String),
     ServerStopped,
 }
@@ -136,6 +164,9 @@ fn client_thread(
     let mut reader = BufReader::new(stdout);
     let next_id = Arc::new(AtomicI32::new(1));
 
+    // Track pending request IDs to their method names for response dispatch
+    let pending_requests: Arc<Mutex<HashMap<i64, String>>> = Arc::new(Mutex::new(HashMap::new()));
+
     // Send initialize request
     let init_id = next_id.fetch_add(1, Ordering::SeqCst);
     let init_request = json!({
@@ -157,7 +188,14 @@ fn client_thread(
                     },
                     "synchronization": {
                         "didSave": true
-                    }
+                    },
+                    "hover": {
+                        "contentFormat": ["plaintext"]
+                    },
+                    "definition": {},
+                    "references": {},
+                    "rename": {},
+                    "codeAction": {}
                 }
             }
         }
@@ -301,6 +339,7 @@ fn client_thread(
                     }
                     Ok(LspRequest::Completion { uri, position }) => {
                         let id = next_id.fetch_add(1, Ordering::SeqCst);
+                        pending_requests.lock().unwrap().insert(id as i64, "textDocument/completion".to_string());
                         let request = json!({
                             "jsonrpc": "2.0",
                             "id": id,
@@ -308,6 +347,79 @@ fn client_thread(
                             "params": {
                                 "textDocument": TextDocumentIdentifier { uri },
                                 "position": position
+                            }
+                        });
+                        let _ = write_message(&mut stdin, &request);
+                    }
+                    Ok(LspRequest::GotoDefinition { uri, position }) => {
+                        let id = next_id.fetch_add(1, Ordering::SeqCst);
+                        pending_requests.lock().unwrap().insert(id as i64, "textDocument/definition".to_string());
+                        let request = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "method": "textDocument/definition",
+                            "params": {
+                                "textDocument": TextDocumentIdentifier { uri },
+                                "position": position
+                            }
+                        });
+                        let _ = write_message(&mut stdin, &request);
+                    }
+                    Ok(LspRequest::References { uri, position }) => {
+                        let id = next_id.fetch_add(1, Ordering::SeqCst);
+                        pending_requests.lock().unwrap().insert(id as i64, "textDocument/references".to_string());
+                        let request = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "method": "textDocument/references",
+                            "params": {
+                                "textDocument": TextDocumentIdentifier { uri },
+                                "position": position,
+                                "context": { "includeDeclaration": true }
+                            }
+                        });
+                        let _ = write_message(&mut stdin, &request);
+                    }
+                    Ok(LspRequest::Hover { uri, position }) => {
+                        let id = next_id.fetch_add(1, Ordering::SeqCst);
+                        pending_requests.lock().unwrap().insert(id as i64, "textDocument/hover".to_string());
+                        let request = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "method": "textDocument/hover",
+                            "params": {
+                                "textDocument": TextDocumentIdentifier { uri },
+                                "position": position
+                            }
+                        });
+                        let _ = write_message(&mut stdin, &request);
+                    }
+                    Ok(LspRequest::Rename { uri, position, new_name }) => {
+                        let id = next_id.fetch_add(1, Ordering::SeqCst);
+                        pending_requests.lock().unwrap().insert(id as i64, "textDocument/rename".to_string());
+                        let request = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "method": "textDocument/rename",
+                            "params": {
+                                "textDocument": TextDocumentIdentifier { uri },
+                                "position": position,
+                                "newName": new_name
+                            }
+                        });
+                        let _ = write_message(&mut stdin, &request);
+                    }
+                    Ok(LspRequest::CodeAction { uri, range }) => {
+                        let id = next_id.fetch_add(1, Ordering::SeqCst);
+                        pending_requests.lock().unwrap().insert(id as i64, "textDocument/codeAction".to_string());
+                        let request = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "method": "textDocument/codeAction",
+                            "params": {
+                                "textDocument": TextDocumentIdentifier { uri },
+                                "range": range,
+                                "context": { "diagnostics": [] }
                             }
                         });
                         let _ = write_message(&mut stdin, &request);
@@ -337,7 +449,7 @@ fn client_thread(
             recv(stdout_rx) -> msg => {
                 match msg {
                     Ok(value) => {
-                        handle_server_message(&value, &response_tx);
+                        handle_server_message(&value, &response_tx, &pending_requests);
                     }
                     Err(_) => {
                         let _ = response_tx.send(LspResponse::ServerStopped);
@@ -353,7 +465,11 @@ fn client_thread(
     let _ = reader_thread.join();
 }
 
-fn handle_server_message(msg: &Value, response_tx: &Sender<LspResponse>) {
+fn handle_server_message(
+    msg: &Value,
+    response_tx: &Sender<LspResponse>,
+    pending_requests: &Arc<Mutex<HashMap<i64, String>>>,
+) {
     // Notification: textDocument/publishDiagnostics
     if msg.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics") {
         if let Some(params) = msg.get("params") {
@@ -371,23 +487,90 @@ fn handle_server_message(msg: &Value, response_tx: &Sender<LspResponse>) {
         return;
     }
 
-    // Response with result (completion response, etc.)
-    if let Some(result) = msg.get("result") {
-        // Try to parse as completion response
-        if let Ok(completion) = serde_json::from_value::<CompletionResponse>(result.clone()) {
-            let _ = response_tx.send(LspResponse::Completions(completion.into_items()));
+    // Response with id — look up method from pending requests
+    if let Some(id) = msg.get("id").and_then(|v| v.as_i64()) {
+        let method = pending_requests.lock().unwrap().remove(&id);
+
+        if let Some(error) = msg.get("error") {
+            let message = error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error")
+                .to_string();
+            let _ = response_tx.send(LspResponse::ServerError(message));
             return;
         }
-        // Other responses we don't handle yet
+
+        let result = msg.get("result");
+
+        match method.as_deref() {
+            Some("textDocument/completion") => {
+                if let Some(result) = result {
+                    if let Ok(completion) =
+                        serde_json::from_value::<CompletionResponse>(result.clone())
+                    {
+                        let _ = response_tx.send(LspResponse::Completions(completion.into_items()));
+                    }
+                }
+            }
+            Some("textDocument/definition") => {
+                let locs = result
+                    .and_then(|r| {
+                        if r.is_null() {
+                            return Some(Vec::new());
+                        }
+                        serde_json::from_value::<DefinitionResponse>(r.clone())
+                            .ok()
+                            .map(|d| d.into_locations())
+                    })
+                    .unwrap_or_default();
+                let _ = response_tx.send(LspResponse::Definition(locs));
+            }
+            Some("textDocument/references") => {
+                let locs = result
+                    .and_then(|r| {
+                        if r.is_null() {
+                            return Some(Vec::new());
+                        }
+                        serde_json::from_value::<Vec<Location>>(r.clone()).ok()
+                    })
+                    .unwrap_or_default();
+                let _ = response_tx.send(LspResponse::References(locs));
+            }
+            Some("textDocument/hover") => {
+                let hover = result.and_then(|r| {
+                    if r.is_null() {
+                        return None;
+                    }
+                    serde_json::from_value::<Hover>(r.clone()).ok()
+                });
+                let _ = response_tx.send(LspResponse::HoverResult(hover));
+            }
+            Some("textDocument/rename") => {
+                let edit = result.and_then(|r| {
+                    if r.is_null() {
+                        return None;
+                    }
+                    serde_json::from_value::<WorkspaceEdit>(r.clone()).ok()
+                });
+                let _ = response_tx.send(LspResponse::RenameResult(edit));
+            }
+            Some("textDocument/codeAction") => {
+                let actions = result
+                    .and_then(|r| {
+                        if r.is_null() {
+                            return Some(Vec::new());
+                        }
+                        serde_json::from_value::<Vec<CodeAction>>(r.clone()).ok()
+                    })
+                    .unwrap_or_default();
+                let _ = response_tx.send(LspResponse::CodeActions(actions));
+            }
+            _ => {
+                // Unknown or untracked response — ignore
+            }
+        }
     }
 
-    // Response with error
-    if let Some(error) = msg.get("error") {
-        let message = error
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("Unknown error")
-            .to_string();
-        let _ = response_tx.send(LspResponse::ServerError(message));
-    }
+    // Other notifications we don't handle — ignore
 }

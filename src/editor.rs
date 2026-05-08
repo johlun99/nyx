@@ -23,6 +23,57 @@ pub struct VisualAnchor {
     pub col: usize,
 }
 
+/// A position in the jump list.
+#[derive(Debug, Clone, Copy)]
+pub struct JumpPosition {
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Vim-style jump list: records cursor positions before big jumps (gd, gr, gg, G, searches).
+pub struct JumpList {
+    entries: Vec<JumpPosition>,
+    cursor: usize, // points *past* the last pushed entry; back goes to cursor-1
+}
+
+impl JumpList {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            cursor: 0,
+        }
+    }
+
+    /// Record current position before a jump.
+    pub fn push(&mut self, line: usize, col: usize) {
+        // Truncate any forward history
+        self.entries.truncate(self.cursor);
+        self.entries.push(JumpPosition { line, col });
+        self.cursor = self.entries.len();
+    }
+
+    /// Go back (Ctrl+O). Returns the position to jump to.
+    pub fn go_back(&mut self) -> Option<JumpPosition> {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            Some(self.entries[self.cursor])
+        } else {
+            None
+        }
+    }
+
+    /// Go forward (Ctrl+I). Returns the position to jump to.
+    pub fn go_forward(&mut self) -> Option<JumpPosition> {
+        if self.cursor < self.entries.len() {
+            let pos = self.entries[self.cursor];
+            self.cursor += 1;
+            Some(pos)
+        } else {
+            None
+        }
+    }
+}
+
 pub struct Editor {
     pub buffer: TextBuffer,
     pub key_parser: KeyParser,
@@ -39,6 +90,7 @@ pub struct Editor {
     replaying: bool,
     pub syntax_state: Option<SyntaxState>,
     pub tab_size: usize,
+    pub jump_list: JumpList,
     last_saved_text: String,
     pending_did_save: bool,
 }
@@ -90,6 +142,7 @@ impl Editor {
             replaying: false,
             syntax_state,
             tab_size: 4,
+            jump_list: JumpList::new(),
             last_saved_text,
             pending_did_save: false,
         }
@@ -354,6 +407,8 @@ impl Editor {
                     }
                 }
             }
+            // LSP actions are handled in app.rs, not here
+            VimAction::LspGotoDefinition | VimAction::LspReferences | VimAction::LspHover => {}
             VimAction::Noop => unreachable!(),
         }
     }
@@ -541,9 +596,12 @@ impl Editor {
         }
     }
 
-    pub fn execute_command(&mut self) {
+    /// Execute the current command and return the result.
+    /// Returns `Some(rename_name)` if the command was `:rename`.
+    pub fn execute_command(&mut self) -> Option<String> {
         let result = self.command_parser.execute();
         let mut message_to_keep: Option<String> = None;
+        let mut rename_name: Option<String> = None;
         match result {
             CommandResult::Quit => {
                 if self.has_unsaved_changes() {
@@ -564,6 +622,9 @@ impl Editor {
                     self.should_quit = true;
                 }
             }
+            CommandResult::Rename(name) => {
+                rename_name = Some(name);
+            }
             CommandResult::Unknown(cmd) => {
                 message_to_keep = Some(format!("Unknown command: {}", cmd));
             }
@@ -574,6 +635,7 @@ impl Editor {
         if let Some(message) = message_to_keep {
             self.status_message = Some(message);
         }
+        rename_name
     }
 
     pub fn start_search(&mut self, direction: SearchDirection) {

@@ -6,6 +6,7 @@ pub enum CommandResult {
     Quit,
     WriteQuit,
     ForceQuit,
+    Rename(String),
     Unknown(String),
 }
 
@@ -21,7 +22,15 @@ impl CommandParser {
     }
 
     pub fn execute(&self) -> CommandResult {
-        match self.input.trim() {
+        let trimmed = self.input.trim();
+        if let Some(name) = trimmed.strip_prefix("rename ") {
+            let new_name = name.trim().to_string();
+            if new_name.is_empty() {
+                return CommandResult::Unknown(trimmed.to_string());
+            }
+            return CommandResult::Rename(new_name);
+        }
+        match trimmed {
             "w" => CommandResult::Write,
             "q" => CommandResult::Quit,
             "wq" | "x" => CommandResult::WriteQuit,
@@ -80,5 +89,19 @@ mod tests {
         let mut parser = CommandParser::new();
         parser.input = "foo".into();
         assert_eq!(parser.execute(), CommandResult::Unknown("foo".into()));
+    }
+
+    #[test]
+    fn parse_rename() {
+        let mut parser = CommandParser::new();
+        parser.input = "rename new_name".into();
+        assert_eq!(parser.execute(), CommandResult::Rename("new_name".into()));
+    }
+
+    #[test]
+    fn parse_rename_empty_name() {
+        let mut parser = CommandParser::new();
+        parser.input = "rename ".into();
+        assert_eq!(parser.execute(), CommandResult::Unknown("rename".into()));
     }
 }
