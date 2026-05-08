@@ -12,6 +12,7 @@ pub enum SettingsTab {
     #[default]
     Editor,
     LspServers,
+    Panels,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +138,7 @@ impl SettingsView {
                     for (tab, label) in [
                         (SettingsTab::Editor, "Editor"),
                         (SettingsTab::LspServers, "LSP Servers"),
+                        (SettingsTab::Panels, "Panels"),
                     ] {
                         let is_active = self.active_tab == tab;
                         let color = if is_active {
@@ -159,10 +161,12 @@ impl SettingsView {
                     let underline_width = match self.active_tab {
                         SettingsTab::Editor => 42.0,
                         SettingsTab::LspServers => 82.0,
+                        SettingsTab::Panels => 48.0,
                     };
                     let offset = match self.active_tab {
                         SettingsTab::Editor => 0.0,
                         SettingsTab::LspServers => 42.0 + 12.0 + 4.0, // "Editor" width + spacing
+                        SettingsTab::Panels => 42.0 + 12.0 + 4.0 + 82.0 + 12.0 + 4.0,
                     };
                     ui.add_space(offset);
                     let rect = egui::Rect::from_min_size(
@@ -189,6 +193,9 @@ impl SettingsView {
                     }
                     SettingsTab::LspServers => {
                         lsp_view.render_content(ui, lsp_manager, theme, panel_width, left_margin);
+                    }
+                    SettingsTab::Panels => {
+                        // placeholder — rendered in Task 7
                     }
                 }
             });
@@ -387,6 +394,10 @@ impl SettingsView {
         if self.active_tab == SettingsTab::LspServers {
             return self.handle_lsp_tab_input(ctx, lsp_view, lsp_manager);
         }
+        // When on Panels tab, delegate to panels handler (stub until Task 8)
+        if self.active_tab == SettingsTab::Panels {
+            return self.handle_panels_tab_input_stub(ctx);
+        }
 
         let mut action = SettingsAction::None;
 
@@ -420,17 +431,19 @@ impl SettingsView {
                     return;
                 }
                 // Tab switching
-                if input.key_pressed(egui::Key::Tab) {
+                if input.key_pressed(egui::Key::Tab) || input.key_pressed(egui::Key::L) {
                     self.active_tab = match self.active_tab {
                         SettingsTab::Editor => SettingsTab::LspServers,
-                        SettingsTab::LspServers => SettingsTab::Editor,
+                        SettingsTab::LspServers => SettingsTab::Panels,
+                        SettingsTab::Panels => SettingsTab::Editor,
                     };
                     return;
                 }
-                if input.key_pressed(egui::Key::H) || input.key_pressed(egui::Key::L) {
+                if input.key_pressed(egui::Key::H) {
                     self.active_tab = match self.active_tab {
-                        SettingsTab::Editor => SettingsTab::LspServers,
+                        SettingsTab::Editor => SettingsTab::Panels,
                         SettingsTab::LspServers => SettingsTab::Editor,
+                        SettingsTab::Panels => SettingsTab::LspServers,
                     };
                     return;
                 }
@@ -467,13 +480,24 @@ impl SettingsView {
         lsp_manager: &mut LspManager,
     ) -> SettingsAction {
         // Check for tab switching first (before delegating to LspServersView)
-        let mut tab_switch = false;
+        let mut tab_forward = false;
+        let mut tab_backward = false;
         ctx.input(|input| {
             if input.key_pressed(egui::Key::Tab) && !input.modifiers.shift {
-                tab_switch = true;
+                tab_forward = true;
+            }
+            if input.key_pressed(egui::Key::L) {
+                tab_forward = true;
+            }
+            if input.key_pressed(egui::Key::H) {
+                tab_backward = true;
             }
         });
-        if tab_switch {
+        if tab_forward {
+            self.active_tab = SettingsTab::Panels;
+            return SettingsAction::None;
+        }
+        if tab_backward {
             self.active_tab = SettingsTab::Editor;
             return SettingsAction::None;
         }
@@ -484,6 +508,25 @@ impl SettingsView {
             super::lsp_servers::LspViewAction::ServerToggled => SettingsAction::ServerToggled,
             super::lsp_servers::LspViewAction::None => SettingsAction::None,
         }
+    }
+
+    /// Stub handler for the Panels tab — replaced in Task 8.
+    fn handle_panels_tab_input_stub(&mut self, ctx: &egui::Context) -> SettingsAction {
+        let mut action = SettingsAction::None;
+        ctx.input(|input| {
+            if input.key_pressed(egui::Key::Escape) {
+                action = SettingsAction::Close;
+                return;
+            }
+            if input.key_pressed(egui::Key::Tab) || input.key_pressed(egui::Key::L) {
+                self.active_tab = SettingsTab::Editor;
+                return;
+            }
+            if input.key_pressed(egui::Key::H) {
+                self.active_tab = SettingsTab::LspServers;
+            }
+        });
+        action
     }
 
     /// Activate a field for editing. For bool/enum fields, toggles immediately and returns true.
@@ -696,5 +739,50 @@ mod tests {
         view.cancel_edit();
         assert!(view.editing.is_none());
         assert!(view.edit_buffer.is_empty());
+    }
+
+    #[test]
+    fn panels_tab_exists_in_cycle() {
+        // Verify that Panels is reachable going forward: Editor -> LspServers -> Panels -> Editor
+        let mut tab = SettingsTab::Editor;
+        tab = match tab {
+            SettingsTab::Editor => SettingsTab::LspServers,
+            SettingsTab::LspServers => SettingsTab::Panels,
+            SettingsTab::Panels => SettingsTab::Editor,
+        };
+        assert_eq!(tab, SettingsTab::LspServers);
+        tab = match tab {
+            SettingsTab::Editor => SettingsTab::LspServers,
+            SettingsTab::LspServers => SettingsTab::Panels,
+            SettingsTab::Panels => SettingsTab::Editor,
+        };
+        assert_eq!(tab, SettingsTab::Panels);
+        tab = match tab {
+            SettingsTab::Editor => SettingsTab::LspServers,
+            SettingsTab::LspServers => SettingsTab::Panels,
+            SettingsTab::Panels => SettingsTab::Editor,
+        };
+        assert_eq!(tab, SettingsTab::Editor);
+
+        // Verify backward cycle: Editor -> Panels -> LspServers -> Editor
+        let mut tab = SettingsTab::Editor;
+        tab = match tab {
+            SettingsTab::Editor => SettingsTab::Panels,
+            SettingsTab::LspServers => SettingsTab::Editor,
+            SettingsTab::Panels => SettingsTab::LspServers,
+        };
+        assert_eq!(tab, SettingsTab::Panels);
+        tab = match tab {
+            SettingsTab::Editor => SettingsTab::Panels,
+            SettingsTab::LspServers => SettingsTab::Editor,
+            SettingsTab::Panels => SettingsTab::LspServers,
+        };
+        assert_eq!(tab, SettingsTab::LspServers);
+        tab = match tab {
+            SettingsTab::Editor => SettingsTab::Panels,
+            SettingsTab::LspServers => SettingsTab::Editor,
+            SettingsTab::Panels => SettingsTab::LspServers,
+        };
+        assert_eq!(tab, SettingsTab::Editor);
     }
 }
