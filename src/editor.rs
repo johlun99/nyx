@@ -767,6 +767,11 @@ impl Editor {
         self.buffer.text() != self.last_saved_text
     }
 
+    /// Mark the current buffer contents as the saved baseline (no unsaved changes).
+    pub fn mark_saved(&mut self) {
+        self.last_saved_text = self.buffer.text();
+    }
+
     pub fn take_did_save_event(&mut self) -> bool {
         let had = self.pending_did_save;
         self.pending_did_save = false;

@@ -9,6 +9,12 @@ use eframe::egui::{self, Rect, Sense, Vec2};
 
 use crate::lsp::protocol::DiagnosticSeverity;
 
+/// Result of a mouse click in the editor area.
+pub struct EditorClick {
+    pub line: usize,
+    pub col: usize,
+}
+
 pub struct EditorView {
     pub scroll_offset: usize,
 }
@@ -18,6 +24,7 @@ impl EditorView {
         Self { scroll_offset: 0 }
     }
 
+    /// Render the editor and return click position if the user clicked in the text area.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -27,7 +34,7 @@ impl EditorView {
         font_size: f32,
         line_number_mode: LineNumberMode,
         lsp_manager: &LspManager,
-    ) {
+    ) -> Option<EditorClick> {
         let buffer = &editor.buffer;
         let mode = editor.mode();
         let file_path = editor.file_path.as_deref();
@@ -56,6 +63,11 @@ impl EditorView {
         // Allocate painter
         let (response, painter) = ui.allocate_painter(available, Sense::click_and_drag());
         let rect = response.rect;
+        let click_pos = if response.clicked() {
+            response.interact_pointer_pos()
+        } else {
+            None
+        };
         painter.rect_filled(rect, 0.0, theme.background);
 
         // Status bar at bottom
@@ -463,12 +475,51 @@ impl EditorView {
             );
         }
 
+        // Resolve click to line/col
+        let editor_click = click_pos.and_then(|pos| {
+            let rel_y = pos.y - rect.min.y;
+            if rel_y < 0.0 || rel_y >= editor_height {
+                return None;
+            }
+            let line = self.scroll_offset + (rel_y / line_height) as usize;
+            let line = line.min(buffer.line_count().saturating_sub(1));
+
+            let rel_x = pos.x - text_x;
+            let col = if rel_x <= 0.0 {
+                0
+            } else {
+                // Walk characters to find the clicked column
+                let line_slice = buffer.line_slice(line);
+                let line_str = line_slice.to_string();
+                let display_str = line_str.trim_end_matches('\n');
+                let mut best_col = display_str.chars().count();
+                let mut prev_width = 0.0_f32;
+                for (ci, _) in display_str.char_indices().enumerate() {
+                    let prefix: String = display_str.chars().take(ci + 1).collect();
+                    let w = painter
+                        .layout_no_wrap(prefix, font_id.clone(), theme.foreground)
+                        .rect
+                        .width();
+                    let midpoint = (prev_width + w) / 2.0;
+                    if rel_x < midpoint {
+                        best_col = ci;
+                        break;
+                    }
+                    prev_width = w;
+                }
+                best_col
+            };
+            Some(EditorClick { line, col })
+        });
+
         // Scroll follow
         if buffer.cursor_line() < self.scroll_offset {
             self.scroll_offset = buffer.cursor_line();
         } else if buffer.cursor_line() >= self.scroll_offset + visible_lines {
             self.scroll_offset = buffer.cursor_line() - visible_lines + 1;
         }
+
+        editor_click
     }
 
     #[allow(clippy::too_many_arguments)]
