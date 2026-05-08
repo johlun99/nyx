@@ -1,11 +1,14 @@
+use crate::config::panels_config::PanelsConfig;
 use crate::config::NyxConfig;
 use crate::lsp::LspManager;
 use crate::renderer::Theme;
 use crate::views::lsp_servers::LspServersView;
+use crate::views::PanelSlot;
 use eframe::egui;
 
 const FIELD_COUNT: usize = 6;
 const AVAILABLE_LANGUAGES: &[&str] = &["rust", "json", "python", "javascript", "typescript"];
+const KNOWN_MODULES: &[&str] = &["filetree", "terminal", "git", "search"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
@@ -79,6 +82,8 @@ pub struct SettingsView {
     pub editing: Option<SettingsField>,
     pub edit_buffer: String,
     pub active_tab: SettingsTab,
+    pub panels_selected_row: usize,
+    pub panels_editing_tab: Option<(PanelSlot, usize)>,
 }
 
 impl SettingsView {
@@ -88,6 +93,8 @@ impl SettingsView {
             editing: None,
             edit_buffer: String::new(),
             active_tab: SettingsTab::default(),
+            panels_selected_row: 0,
+            panels_editing_tab: None,
         }
     }
 
@@ -100,6 +107,7 @@ impl SettingsView {
         theme: &Theme,
         lsp_view: &LspServersView,
         lsp_manager: &LspManager,
+        panels_config: &PanelsConfig,
     ) -> bool {
         let mut config_changed = false;
 
@@ -195,7 +203,7 @@ impl SettingsView {
                         lsp_view.render_content(ui, lsp_manager, theme, panel_width, left_margin);
                     }
                     SettingsTab::Panels => {
-                        // placeholder — rendered in Task 7
+                        self.render_panels_tab(ui, theme, panel_width, left_margin, panels_config);
                     }
                 }
             });
@@ -343,6 +351,263 @@ impl SettingsView {
                 }
             }
         });
+    }
+
+    /// Capitalize the first character of a string.
+    fn capitalize(s: &str) -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        }
+    }
+
+    /// Render the Panels settings tab.
+    fn render_panels_tab(
+        &self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        panel_width: f32,
+        left_margin: f32,
+        panels_config: &PanelsConfig,
+    ) {
+        let slots = [PanelSlot::Left, PanelSlot::Bottom, PanelSlot::Right];
+        let mut current_row: usize = 0;
+
+        for slot in slots {
+            let slot_label = match slot {
+                PanelSlot::Left => "LEFT",
+                PanelSlot::Bottom => "BOTTOM",
+                PanelSlot::Right => "RIGHT",
+            };
+
+            // Section header
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(left_margin);
+                ui.label(
+                    egui::RichText::new(slot_label)
+                        .color(theme.syntax.keyword)
+                        .size(11.0)
+                        .strong(),
+                );
+            });
+            ui.add_space(4.0);
+
+            let tabs = panels_config.tabs_for(slot);
+            if tabs.is_empty() {
+                // Empty row
+                let is_selected = current_row == self.panels_selected_row;
+                let row_bg = if is_selected {
+                    theme.selection
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                ui.horizontal(|ui| {
+                    ui.add_space(left_margin);
+                    let row_rect =
+                        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(panel_width, 24.0));
+                    ui.painter().rect_filled(row_rect, 4.0, row_bg);
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.add_space(8.0);
+                            if is_selected {
+                                ui.label(
+                                    egui::RichText::new("\u{25b8}")
+                                        .color(theme.syntax.keyword)
+                                        .size(12.0),
+                                );
+                            } else {
+                                ui.add_space(12.0);
+                            }
+                            ui.label(
+                                egui::RichText::new("(empty)")
+                                    .color(theme.line_number)
+                                    .size(12.0),
+                            );
+                        });
+                    });
+                });
+                ui.add_space(2.0);
+                current_row += 1;
+
+                // Add tab row
+                let is_selected = current_row == self.panels_selected_row;
+                let row_bg = if is_selected {
+                    theme.selection
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                ui.horizontal(|ui| {
+                    ui.add_space(left_margin);
+                    let row_rect =
+                        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(panel_width, 24.0));
+                    ui.painter().rect_filled(row_rect, 4.0, row_bg);
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.add_space(8.0);
+                            if is_selected {
+                                ui.label(
+                                    egui::RichText::new("\u{25b8}")
+                                        .color(theme.syntax.keyword)
+                                        .size(12.0),
+                                );
+                            } else {
+                                ui.add_space(12.0);
+                            }
+                            ui.label(
+                                egui::RichText::new("+ Add tab...")
+                                    .color(theme.syntax.string)
+                                    .size(12.0),
+                            );
+                        });
+                    });
+                });
+                ui.add_space(2.0);
+                current_row += 1;
+            } else {
+                // Tab rows
+                for (tab_idx, tab) in tabs.iter().enumerate() {
+                    let is_selected = current_row == self.panels_selected_row;
+                    let is_editing = self.panels_editing_tab == Some((slot, tab_idx));
+                    let row_bg = if is_selected {
+                        theme.selection
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+
+                    ui.horizontal(|ui| {
+                        ui.add_space(left_margin);
+                        let row_rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(panel_width, if is_editing { 48.0 } else { 24.0 }),
+                        );
+                        ui.painter().rect_filled(row_rect, 4.0, row_bg);
+                        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                            if is_editing {
+                                // Editing: show checkboxes for each module
+                                ui.vertical(|ui| {
+                                    ui.add_space(4.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            egui::RichText::new("\u{25b8}")
+                                                .color(theme.syntax.keyword)
+                                                .size(12.0),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format!("{}:", tab_idx + 1))
+                                                .color(theme.foreground)
+                                                .size(12.0),
+                                        );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(20.0);
+                                        for (key_idx, &module) in KNOWN_MODULES.iter().enumerate() {
+                                            let in_tab = tab.modules.iter().any(|m| m == module);
+                                            let used_elsewhere =
+                                                !in_tab && panels_config.has_module(module);
+                                            let text = format!(
+                                                "[{}] {}",
+                                                if in_tab { "x" } else { " " },
+                                                Self::capitalize(module)
+                                            );
+                                            let color = if used_elsewhere {
+                                                theme.line_number
+                                            } else if in_tab {
+                                                theme.syntax.string
+                                            } else {
+                                                theme.foreground
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} {}  ",
+                                                    key_idx + 1,
+                                                    text
+                                                ))
+                                                .color(color)
+                                                .size(12.0),
+                                            );
+                                        }
+                                    });
+                                });
+                            } else {
+                                ui.horizontal_centered(|ui| {
+                                    ui.add_space(8.0);
+                                    if is_selected {
+                                        ui.label(
+                                            egui::RichText::new("\u{25b8}")
+                                                .color(theme.syntax.keyword)
+                                                .size(12.0),
+                                        );
+                                    } else {
+                                        ui.add_space(12.0);
+                                    }
+                                    let modules_str = if tab.modules.is_empty() {
+                                        "(empty tab)".to_string()
+                                    } else {
+                                        tab.modules
+                                            .iter()
+                                            .map(|m| Self::capitalize(m))
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}: {}",
+                                            tab_idx + 1,
+                                            modules_str
+                                        ))
+                                        .color(theme.foreground)
+                                        .size(12.0),
+                                    );
+                                });
+                            }
+                        });
+                    });
+                    ui.add_space(2.0);
+                    current_row += 1;
+                }
+
+                // Add tab row
+                let is_selected = current_row == self.panels_selected_row;
+                let row_bg = if is_selected {
+                    theme.selection
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                ui.horizontal(|ui| {
+                    ui.add_space(left_margin);
+                    let row_rect =
+                        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(panel_width, 24.0));
+                    ui.painter().rect_filled(row_rect, 4.0, row_bg);
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.add_space(8.0);
+                            if is_selected {
+                                ui.label(
+                                    egui::RichText::new("\u{25b8}")
+                                        .color(theme.syntax.keyword)
+                                        .size(12.0),
+                                );
+                            } else {
+                                ui.add_space(12.0);
+                            }
+                            ui.label(
+                                egui::RichText::new("+ Add tab...")
+                                    .color(theme.syntax.string)
+                                    .size(12.0),
+                            );
+                        });
+                    });
+                });
+                ui.add_space(2.0);
+                current_row += 1;
+            }
+        }
+
+        // suppress unused variable warning in non-debug builds
+        let _ = current_row;
     }
 
     /// Commit the current edit buffer to the config.

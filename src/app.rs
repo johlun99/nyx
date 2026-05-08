@@ -1,5 +1,6 @@
 // src/app.rs
 use crate::config::lsp_config::LspConfig;
+use crate::config::panels_config::PanelsConfig;
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::lsp::LspManager;
@@ -47,6 +48,7 @@ pub struct NyxApp {
     filetree: FiletreeModule,
     command_palette: CommandPalette,
     command_palette_open: bool,
+    panels_config: PanelsConfig,
 }
 
 impl NyxApp {
@@ -87,6 +89,7 @@ impl NyxApp {
             filetree: FiletreeModule::new(filetree_root),
             command_palette: CommandPalette::new(),
             command_palette_open: false,
+            panels_config: PanelsConfig::default(),
         }
     }
 
@@ -1073,6 +1076,7 @@ impl eframe::App for NyxApp {
                     &self.theme,
                     &self.lsp_view,
                     &self.lsp_manager,
+                    &self.panels_config,
                 );
                 if changed {
                     self.editor.set_tab_size(self.config.editor.tab_size);
