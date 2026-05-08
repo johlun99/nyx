@@ -40,6 +40,7 @@ impl PanelSlot {
         }
     }
 
+    #[allow(dead_code)]
     pub fn next(&self) -> Self {
         match self {
             Self::Left => Self::Bottom,
@@ -48,6 +49,7 @@ impl PanelSlot {
         }
     }
 
+    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Left => "left",
