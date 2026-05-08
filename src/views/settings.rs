@@ -27,6 +27,13 @@ pub enum SettingsAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelsRowKind {
+    Empty(PanelSlot),
+    Tab(PanelSlot, usize),
+    AddTab(PanelSlot),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsField {
     FontFamily,
     FontSize,
@@ -654,16 +661,21 @@ impl SettingsView {
         config: &mut NyxConfig,
         lsp_view: &mut LspServersView,
         lsp_manager: &mut LspManager,
+        panels_config: &mut PanelsConfig,
     ) -> SettingsAction {
-        // When on the LSP tab, delegate input to LspServersView
-        if self.active_tab == SettingsTab::LspServers {
-            return self.handle_lsp_tab_input(ctx, lsp_view, lsp_manager);
+        match self.active_tab {
+            SettingsTab::Editor => self.handle_editor_tab_input(ctx, config),
+            SettingsTab::LspServers => self.handle_lsp_tab_input(ctx, lsp_view, lsp_manager),
+            SettingsTab::Panels => self.handle_panels_tab_input(ctx, panels_config),
         }
-        // When on Panels tab, delegate to panels handler (stub until Task 8)
-        if self.active_tab == SettingsTab::Panels {
-            return self.handle_panels_tab_input_stub(ctx);
-        }
+    }
 
+    /// Handle input when the Editor tab is active.
+    fn handle_editor_tab_input(
+        &mut self,
+        ctx: &egui::Context,
+        config: &mut NyxConfig,
+    ) -> SettingsAction {
         let mut action = SettingsAction::None;
 
         ctx.input(|input| {
@@ -697,19 +709,11 @@ impl SettingsView {
                 }
                 // Tab switching
                 if input.key_pressed(egui::Key::Tab) || input.key_pressed(egui::Key::L) {
-                    self.active_tab = match self.active_tab {
-                        SettingsTab::Editor => SettingsTab::LspServers,
-                        SettingsTab::LspServers => SettingsTab::Panels,
-                        SettingsTab::Panels => SettingsTab::Editor,
-                    };
+                    self.active_tab = SettingsTab::LspServers;
                     return;
                 }
                 if input.key_pressed(egui::Key::H) {
-                    self.active_tab = match self.active_tab {
-                        SettingsTab::Editor => SettingsTab::Panels,
-                        SettingsTab::LspServers => SettingsTab::Editor,
-                        SettingsTab::Panels => SettingsTab::LspServers,
-                    };
+                    self.active_tab = SettingsTab::Panels;
                     return;
                 }
                 if input.key_pressed(egui::Key::J) || input.key_pressed(egui::Key::ArrowDown) {
@@ -775,22 +779,184 @@ impl SettingsView {
         }
     }
 
-    /// Stub handler for the Panels tab — replaced in Task 8.
-    fn handle_panels_tab_input_stub(&mut self, ctx: &egui::Context) -> SettingsAction {
+    /// Count selectable rows across all panel slots.
+    fn panels_total_rows(panels_config: &PanelsConfig) -> usize {
+        let mut total = 0;
+        for slot in [PanelSlot::Left, PanelSlot::Bottom, PanelSlot::Right] {
+            let tabs = panels_config.tabs_for(slot);
+            if tabs.is_empty() {
+                total += 2; // empty row + add row
+            } else {
+                total += tabs.len() + 1; // tab rows + add row
+            }
+        }
+        total
+    }
+
+    /// Map a row index to a PanelsRowKind.
+    fn panels_row_info(panels_config: &PanelsConfig, target_row: usize) -> Option<PanelsRowKind> {
+        let mut current = 0;
+        for slot in [PanelSlot::Left, PanelSlot::Bottom, PanelSlot::Right] {
+            let tabs = panels_config.tabs_for(slot);
+            if tabs.is_empty() {
+                // empty row
+                if current == target_row {
+                    return Some(PanelsRowKind::Empty(slot));
+                }
+                current += 1;
+                // add row
+                if current == target_row {
+                    return Some(PanelsRowKind::AddTab(slot));
+                }
+                current += 1;
+            } else {
+                for (idx, _) in tabs.iter().enumerate() {
+                    if current == target_row {
+                        return Some(PanelsRowKind::Tab(slot, idx));
+                    }
+                    current += 1;
+                }
+                // add row
+                if current == target_row {
+                    return Some(PanelsRowKind::AddTab(slot));
+                }
+                current += 1;
+            }
+        }
+        None
+    }
+
+    /// Handle input when the Panels tab is active.
+    fn handle_panels_tab_input(
+        &mut self,
+        ctx: &egui::Context,
+        panels_config: &mut PanelsConfig,
+    ) -> SettingsAction {
         let mut action = SettingsAction::None;
+        let total_rows = Self::panels_total_rows(panels_config);
+
+        // Collect key presses first to avoid borrow issues
+        let mut escape = false;
+        let mut tab_forward = false;
+        let mut tab_backward = false;
+        let mut nav_down = false;
+        let mut nav_up = false;
+        let mut enter = false;
+        let mut delete = false;
+        let mut num_key: Option<usize> = None;
+
         ctx.input(|input| {
-            if input.key_pressed(egui::Key::Escape) {
-                action = SettingsAction::Close;
-                return;
-            }
-            if input.key_pressed(egui::Key::Tab) || input.key_pressed(egui::Key::L) {
-                self.active_tab = SettingsTab::Editor;
-                return;
-            }
-            if input.key_pressed(egui::Key::H) {
-                self.active_tab = SettingsTab::LspServers;
+            escape = input.key_pressed(egui::Key::Escape);
+            tab_forward = input.key_pressed(egui::Key::Tab) || input.key_pressed(egui::Key::L);
+            tab_backward = input.key_pressed(egui::Key::H);
+            nav_down = input.key_pressed(egui::Key::J) || input.key_pressed(egui::Key::ArrowDown);
+            nav_up = input.key_pressed(egui::Key::K) || input.key_pressed(egui::Key::ArrowUp);
+            enter = input.key_pressed(egui::Key::Enter);
+            delete = input.key_pressed(egui::Key::D);
+            if input.key_pressed(egui::Key::Num1) {
+                num_key = Some(0);
+            } else if input.key_pressed(egui::Key::Num2) {
+                num_key = Some(1);
+            } else if input.key_pressed(egui::Key::Num3) {
+                num_key = Some(2);
+            } else if input.key_pressed(egui::Key::Num4) {
+                num_key = Some(3);
             }
         });
+
+        if escape {
+            if self.panels_editing_tab.is_some() {
+                self.panels_editing_tab = None;
+            } else {
+                action = SettingsAction::Close;
+            }
+            return action;
+        }
+
+        // Number key: toggle module in edit mode
+        if let (Some(module_idx), Some((slot, tab_idx))) = (num_key, self.panels_editing_tab) {
+            if let Some(&module) = KNOWN_MODULES.get(module_idx) {
+                let tabs = panels_config.tabs_for(slot);
+                if let Some(tab) = tabs.get(tab_idx) {
+                    if tab.modules.iter().any(|m| m == module) {
+                        panels_config.remove_module(slot, tab_idx, module);
+                        // After remove_module, the tab may have been deleted if it was the last module.
+                        // Check if tab still exists; if not, exit edit mode.
+                        if panels_config.tabs_for(slot).get(tab_idx).is_none() {
+                            self.panels_editing_tab = None;
+                            // clamp selected row
+                            let new_total = Self::panels_total_rows(panels_config);
+                            if self.panels_selected_row >= new_total && new_total > 0 {
+                                self.panels_selected_row = new_total - 1;
+                            }
+                        }
+                    } else {
+                        panels_config.add_module(slot, tab_idx, module);
+                    }
+                }
+            }
+            return SettingsAction::ConfigChanged;
+        }
+
+        // Tab switching only when NOT in editing mode (for H/L)
+        if self.panels_editing_tab.is_none() {
+            if tab_forward {
+                self.active_tab = SettingsTab::Editor;
+                return SettingsAction::None;
+            }
+            if tab_backward {
+                self.active_tab = SettingsTab::LspServers;
+                return SettingsAction::None;
+            }
+        } else if tab_forward && !tab_backward {
+            // Tab key in edit mode: just ignore (don't switch tabs)
+        }
+
+        // Navigation
+        if nav_down {
+            if self.panels_selected_row + 1 < total_rows {
+                self.panels_selected_row += 1;
+            }
+            return action;
+        }
+        if nav_up {
+            if self.panels_selected_row > 0 {
+                self.panels_selected_row -= 1;
+            }
+            return action;
+        }
+
+        // Enter: activate selected row
+        if enter {
+            match Self::panels_row_info(panels_config, self.panels_selected_row) {
+                Some(PanelsRowKind::Tab(slot, idx)) => {
+                    self.panels_editing_tab = Some((slot, idx));
+                }
+                Some(PanelsRowKind::AddTab(slot)) => {
+                    panels_config.add_tab(slot);
+                    let new_tab_idx = panels_config.tabs_for(slot).len() - 1;
+                    self.panels_editing_tab = Some((slot, new_tab_idx));
+                    action = SettingsAction::ConfigChanged;
+                }
+                Some(PanelsRowKind::Empty(_)) | None => {}
+            }
+            return action;
+        }
+
+        // D: delete tab row (not in edit mode)
+        if delete && self.panels_editing_tab.is_none() {
+            if let Some(PanelsRowKind::Tab(slot, idx)) =
+                Self::panels_row_info(panels_config, self.panels_selected_row)
+            {
+                panels_config.remove_tab(slot, idx);
+                let new_total = Self::panels_total_rows(panels_config);
+                if self.panels_selected_row >= new_total && new_total > 0 {
+                    self.panels_selected_row = new_total - 1;
+                }
+                action = SettingsAction::ConfigChanged;
+            }
+        }
+
         action
     }
 
@@ -1049,5 +1215,92 @@ mod tests {
             SettingsTab::Panels => SettingsTab::LspServers,
         };
         assert_eq!(tab, SettingsTab::Editor);
+    }
+
+    #[test]
+    fn panels_add_tab_to_empty_panel() {
+        let mut panels_config = PanelsConfig {
+            left: vec![],
+            bottom: vec![],
+            right: vec![],
+        };
+        assert!(panels_config.is_empty(PanelSlot::Bottom));
+
+        // The "Add tab..." row for an empty panel is row index 1 (empty row = 0, add = 1)
+        // For Left slot: rows 0=empty, 1=add
+        // For Bottom slot: rows 2=empty, 3=add
+        // For Right slot: rows 4=empty, 5=add
+        let row_info = SettingsView::panels_row_info(&panels_config, 1);
+        assert_eq!(row_info, Some(PanelsRowKind::AddTab(PanelSlot::Left)));
+
+        // Simulate Enter on "Add tab..." for Left
+        panels_config.add_tab(PanelSlot::Left);
+        assert_eq!(panels_config.left.len(), 1);
+        assert!(panels_config.left[0].modules.is_empty());
+    }
+
+    #[test]
+    fn panels_remove_tab() {
+        use crate::config::panels_config::PanelTab;
+        let mut panels_config = PanelsConfig {
+            left: vec![
+                PanelTab {
+                    modules: vec!["filetree".into()],
+                },
+                PanelTab {
+                    modules: vec!["git".into()],
+                },
+            ],
+            bottom: vec![],
+            right: vec![],
+        };
+
+        // Row 0 = Tab(Left, 0), Row 1 = Tab(Left, 1), Row 2 = AddTab(Left)
+        assert_eq!(
+            SettingsView::panels_row_info(&panels_config, 0),
+            Some(PanelsRowKind::Tab(PanelSlot::Left, 0))
+        );
+        assert_eq!(
+            SettingsView::panels_row_info(&panels_config, 1),
+            Some(PanelsRowKind::Tab(PanelSlot::Left, 1))
+        );
+
+        // Remove tab at index 0
+        panels_config.remove_tab(PanelSlot::Left, 0);
+        assert_eq!(panels_config.left.len(), 1);
+        assert_eq!(panels_config.left[0].modules, vec!["git"]);
+
+        // Now only 1 tab remains: Row 0 = Tab(Left, 0), Row 1 = AddTab(Left)
+        assert_eq!(
+            SettingsView::panels_row_info(&panels_config, 0),
+            Some(PanelsRowKind::Tab(PanelSlot::Left, 0))
+        );
+        assert_eq!(
+            SettingsView::panels_row_info(&panels_config, 1),
+            Some(PanelsRowKind::AddTab(PanelSlot::Left))
+        );
+    }
+
+    #[test]
+    fn panels_toggle_module() {
+        let mut panels_config = PanelsConfig::default();
+        // Default: left has filetree tab
+        assert_eq!(panels_config.left.len(), 1);
+        assert_eq!(panels_config.left[0].modules, vec!["filetree"]);
+
+        // Add "git" module to left tab 0
+        panels_config.add_module(PanelSlot::Left, 0, "git");
+        assert_eq!(panels_config.left[0].modules, vec!["filetree", "git"]);
+        assert!(panels_config.has_module("git"));
+
+        // Remove "git" — tab should still exist since "filetree" is there
+        panels_config.remove_module(PanelSlot::Left, 0, "git");
+        assert_eq!(panels_config.left[0].modules, vec!["filetree"]);
+        assert!(!panels_config.has_module("git"));
+
+        // "filetree" is in left tab, so adding it to a different tab is a no-op
+        panels_config.add_tab(PanelSlot::Right);
+        panels_config.add_module(PanelSlot::Right, 0, "filetree");
+        assert!(panels_config.right[0].modules.is_empty());
     }
 }

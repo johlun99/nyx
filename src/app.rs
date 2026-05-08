@@ -384,6 +384,7 @@ impl NyxApp {
                     &mut self.config,
                     &mut self.lsp_view,
                     &mut self.lsp_manager,
+                    &mut self.panels_config,
                 );
                 match action {
                     SettingsAction::Close => {
