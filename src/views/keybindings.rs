@@ -243,8 +243,18 @@ impl KeybindingsView {
             },
             KeybindingEntry {
                 category: "App",
-                action: "Focus File Explorer",
+                action: "Focus Left Panel",
                 key: "Ctrl+H",
+            },
+            KeybindingEntry {
+                category: "App",
+                action: "Focus Bottom Panel",
+                key: "Ctrl+J",
+            },
+            KeybindingEntry {
+                category: "App",
+                action: "Focus Right Panel",
+                key: "Ctrl+L",
             },
         ]
     }

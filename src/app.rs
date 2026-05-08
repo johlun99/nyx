@@ -7,7 +7,8 @@ use crate::modules::{CommandPalette, FiletreeModule, ModuleAction, PaletteAction
 use crate::renderer::{EditorView, Theme};
 use crate::syntax::languages::language_for_extension;
 use crate::views::{
-    AppView, KeybindingsView, LspServersView, PanelFocus, SettingsAction, SettingsTab, SettingsView,
+    AppView, KeybindingsView, LspServersView, PanelFocus, PanelSlot, SettingsAction, SettingsTab,
+    SettingsView,
 };
 use crate::vim::{Mode, VimAction, VisualKind};
 use eframe::egui;
@@ -41,6 +42,8 @@ pub struct NyxApp {
     /// Panel system
     panel_focus: PanelFocus,
     left_panel_visible: bool,
+    bottom_panel_visible: bool,
+    right_panel_visible: bool,
     filetree: FiletreeModule,
     command_palette: CommandPalette,
     command_palette_open: bool,
@@ -79,10 +82,67 @@ impl NyxApp {
             last_lsp_error_shown: None,
             panel_focus: PanelFocus::default(),
             left_panel_visible,
+            bottom_panel_visible: false,
+            right_panel_visible: false,
             filetree: FiletreeModule::new(filetree_root),
             command_palette: CommandPalette::new(),
             command_palette_open: false,
         }
+    }
+
+    fn filetree_panel(&self) -> PanelSlot {
+        self.config
+            .modules
+            .filetree
+            .panel
+            .as_deref()
+            .and_then(PanelSlot::from_config)
+            .unwrap_or(PanelSlot::Left)
+    }
+
+    fn panel_visible(&self, slot: PanelSlot) -> bool {
+        match slot {
+            PanelSlot::Left => self.left_panel_visible,
+            PanelSlot::Bottom => self.bottom_panel_visible,
+            PanelSlot::Right => self.right_panel_visible,
+        }
+    }
+
+    fn set_panel_visible(&mut self, slot: PanelSlot, visible: bool) {
+        match slot {
+            PanelSlot::Left => self.left_panel_visible = visible,
+            PanelSlot::Bottom => self.bottom_panel_visible = visible,
+            PanelSlot::Right => self.right_panel_visible = visible,
+        }
+    }
+
+    fn panel_focus_for_slot(slot: PanelSlot) -> PanelFocus {
+        match slot {
+            PanelSlot::Left => PanelFocus::LeftPanel,
+            PanelSlot::Bottom => PanelFocus::BottomPanel,
+            PanelSlot::Right => PanelFocus::RightPanel,
+        }
+    }
+
+    fn slot_for_focus(focus: PanelFocus) -> Option<PanelSlot> {
+        match focus {
+            PanelFocus::LeftPanel => Some(PanelSlot::Left),
+            PanelFocus::BottomPanel => Some(PanelSlot::Bottom),
+            PanelFocus::RightPanel => Some(PanelSlot::Right),
+            PanelFocus::Editor => None,
+        }
+    }
+
+    fn render_empty_panel(ui: &mut egui::Ui, theme: &Theme) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(40.0);
+            ui.label(
+                egui::RichText::new("No module assigned")
+                    .color(theme.line_number)
+                    .size(12.0)
+                    .italics(),
+            );
+        });
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
@@ -221,10 +281,16 @@ impl NyxApp {
         let mut view_switch: Option<AppView> = None;
         let mut toggle_panel = false;
         let mut toggle_palette = false;
-        let mut focus_left_panel = false;
+        let mut focus_panel_slot: Option<PanelSlot> = None;
         ctx.input(|input| {
             if input.modifiers.ctrl && input.key_pressed(egui::Key::H) {
-                focus_left_panel = true;
+                focus_panel_slot = Some(PanelSlot::Left);
+            }
+            if input.modifiers.ctrl && input.key_pressed(egui::Key::J) {
+                focus_panel_slot = Some(PanelSlot::Bottom);
+            }
+            if input.modifiers.ctrl && input.key_pressed(egui::Key::L) {
+                focus_panel_slot = Some(PanelSlot::Right);
             }
             if input.modifiers.command && input.key_pressed(egui::Key::B) {
                 toggle_panel = true;
@@ -256,8 +322,10 @@ impl NyxApp {
             }
         });
         if toggle_panel {
-            self.left_panel_visible = !self.left_panel_visible;
-            if !self.left_panel_visible {
+            let slot = self.filetree_panel();
+            let new_vis = !self.panel_visible(slot);
+            self.set_panel_visible(slot, new_vis);
+            if !new_vis {
                 self.panel_focus = PanelFocus::Editor;
             }
             return;
@@ -269,17 +337,20 @@ impl NyxApp {
             }
             return;
         }
-        if focus_left_panel && self.active_view == AppView::Editor {
-            if self.panel_focus == PanelFocus::LeftPanel {
-                // Already focused — hide panel
-                self.left_panel_visible = false;
-                self.panel_focus = PanelFocus::Editor;
-            } else {
-                // Open panel if hidden, then focus it
-                self.left_panel_visible = true;
-                self.panel_focus = PanelFocus::LeftPanel;
+        if let Some(slot) = focus_panel_slot {
+            if self.active_view == AppView::Editor {
+                let target_focus = Self::panel_focus_for_slot(slot);
+                if self.panel_focus == target_focus {
+                    // Already focused — hide panel
+                    self.set_panel_visible(slot, false);
+                    self.panel_focus = PanelFocus::Editor;
+                } else {
+                    // Open panel if hidden, then focus it
+                    self.set_panel_visible(slot, true);
+                    self.panel_focus = target_focus;
+                }
+                return;
             }
-            return;
         }
         if let Some(new_view) = view_switch {
             if new_view == AppView::Keybindings {
@@ -329,26 +400,31 @@ impl NyxApp {
             AppView::Editor => {}
         }
 
-        // --- Left panel (filetree) input ---
-        if self.panel_focus == PanelFocus::LeftPanel && self.left_panel_visible {
-            // Escape returns focus to editor
-            let escape_pressed = ctx.input(|input| {
-                input.key_pressed(egui::Key::Escape)
-                    || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
-            });
-            if escape_pressed {
-                self.panel_focus = PanelFocus::Editor;
+        // --- Panel input routing ---
+        if let Some(slot) = Self::slot_for_focus(self.panel_focus) {
+            if self.panel_visible(slot) {
+                // Escape returns focus to editor
+                let escape_pressed = ctx.input(|input| {
+                    input.key_pressed(egui::Key::Escape)
+                        || (input.modifiers.ctrl && input.key_pressed(egui::Key::OpenBracket))
+                });
+                if escape_pressed {
+                    self.panel_focus = PanelFocus::Editor;
+                    return;
+                }
+                // Route input to the module assigned to this slot
+                if slot == self.filetree_panel() {
+                    let action = self.filetree.handle_input(ctx);
+                    match action {
+                        ModuleAction::OpenFile(path) => {
+                            self.open_file(&path);
+                            self.panel_focus = PanelFocus::Editor;
+                        }
+                        ModuleAction::None => {}
+                    }
+                }
                 return;
             }
-            let action = self.filetree.handle_input(ctx);
-            match action {
-                ModuleAction::OpenFile(path) => {
-                    self.open_file(&path);
-                    self.panel_focus = PanelFocus::Editor;
-                }
-                ModuleAction::None => {}
-            }
-            return;
         }
 
         // --- Editor input ---
@@ -783,8 +859,10 @@ impl NyxApp {
         match action {
             PaletteAction::None => {}
             PaletteAction::ToggleFiletree => {
-                self.left_panel_visible = !self.left_panel_visible;
-                if !self.left_panel_visible {
+                let slot = self.filetree_panel();
+                let new_vis = !self.panel_visible(slot);
+                self.set_panel_visible(slot, new_vis);
+                if !new_vis {
                     self.panel_focus = PanelFocus::Editor;
                 }
             }
@@ -874,18 +952,93 @@ impl eframe::App for NyxApp {
             }
         }
 
-        // Left panel (filetree) — must be rendered before CentralPanel per egui rules
+        // Panels — must be rendered before CentralPanel per egui rules
         let mut panel_action = ModuleAction::None;
-        if self.active_view == AppView::Editor && self.left_panel_visible {
+        let mut panel_clicked = None;
+        if self.active_view == AppView::Editor {
             let panel_bg = self.theme.background;
-            let panel_focused = self.panel_focus == PanelFocus::LeftPanel;
-            egui::SidePanel::left("left_panel")
-                .default_width(220.0)
-                .width_range(150.0..=400.0)
-                .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
-                .show_animated(ctx, true, |ui| {
-                    panel_action = self.filetree.render(ui, &self.theme, panel_focused);
-                });
+            let ft_slot = self.filetree_panel();
+
+            // Detect primary click position for panel focus
+            let click_pos = ctx.input(|i| {
+                if i.pointer.any_pressed() {
+                    i.pointer.interact_pos()
+                } else {
+                    None
+                }
+            });
+
+            // Left panel
+            if self.left_panel_visible {
+                let focused = self.panel_focus == PanelFocus::LeftPanel;
+                if let Some(resp) = egui::SidePanel::left("left_panel")
+                    .default_width(220.0)
+                    .width_range(150.0..=400.0)
+                    .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
+                    .show_animated(ctx, true, |ui| {
+                        if ft_slot == PanelSlot::Left {
+                            panel_action = self.filetree.render(ui, &self.theme, focused);
+                        } else {
+                            Self::render_empty_panel(ui, &self.theme);
+                        }
+                    })
+                {
+                    if let Some(pos) = click_pos {
+                        if resp.response.rect.contains(pos) {
+                            panel_clicked = Some(PanelFocus::LeftPanel);
+                        }
+                    }
+                }
+            }
+
+            // Right panel
+            if self.right_panel_visible {
+                let focused = self.panel_focus == PanelFocus::RightPanel;
+                if let Some(resp) = egui::SidePanel::right("right_panel")
+                    .default_width(220.0)
+                    .width_range(150.0..=400.0)
+                    .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
+                    .show_animated(ctx, true, |ui| {
+                        if ft_slot == PanelSlot::Right {
+                            panel_action = self.filetree.render(ui, &self.theme, focused);
+                        } else {
+                            Self::render_empty_panel(ui, &self.theme);
+                        }
+                    })
+                {
+                    if let Some(pos) = click_pos {
+                        if resp.response.rect.contains(pos) {
+                            panel_clicked = Some(PanelFocus::RightPanel);
+                        }
+                    }
+                }
+            }
+
+            // Bottom panel
+            if self.bottom_panel_visible {
+                let focused = self.panel_focus == PanelFocus::BottomPanel;
+                if let Some(resp) = egui::TopBottomPanel::bottom("bottom_panel")
+                    .default_height(200.0)
+                    .height_range(100.0..=300.0)
+                    .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
+                    .show_animated(ctx, true, |ui| {
+                        if ft_slot == PanelSlot::Bottom {
+                            panel_action = self.filetree.render(ui, &self.theme, focused);
+                        } else {
+                            Self::render_empty_panel(ui, &self.theme);
+                        }
+                    })
+                {
+                    if let Some(pos) = click_pos {
+                        if resp.response.rect.contains(pos) {
+                            panel_clicked = Some(PanelFocus::BottomPanel);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(focus) = panel_clicked {
+            self.panel_focus = focus;
         }
         if let ModuleAction::OpenFile(path) = panel_action {
             self.open_file(&path);
@@ -895,10 +1048,11 @@ impl eframe::App for NyxApp {
         match self.active_view {
             AppView::Editor => {
                 self.editor.ensure_syntax_parsed();
+                let mut click = None;
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
                     .show(ctx, |ui| {
-                        self.editor_view.render(
+                        click = self.editor_view.render(
                             ui,
                             &self.editor,
                             &self.theme,
@@ -907,6 +1061,10 @@ impl eframe::App for NyxApp {
                             &self.lsp_manager,
                         );
                     });
+                if let Some(c) = click {
+                    self.editor.buffer.set_cursor(c.line, c.col);
+                    self.panel_focus = PanelFocus::Editor;
+                }
             }
             AppView::Settings => {
                 let changed = self.settings_view.render(

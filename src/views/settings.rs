@@ -2,9 +2,10 @@ use crate::config::NyxConfig;
 use crate::lsp::LspManager;
 use crate::renderer::Theme;
 use crate::views::lsp_servers::LspServersView;
+use crate::views::PanelSlot;
 use eframe::egui;
 
-const FIELD_COUNT: usize = 6;
+const FIELD_COUNT: usize = 7;
 const AVAILABLE_LANGUAGES: &[&str] = &["rust", "json", "python", "javascript", "typescript"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -30,6 +31,7 @@ pub enum SettingsField {
     TabSize,
     CursorBlink,
     WordWrap,
+    FiletreePanel,
 }
 
 impl SettingsField {
@@ -41,6 +43,7 @@ impl SettingsField {
             3 => Some(Self::TabSize),
             4 => Some(Self::CursorBlink),
             5 => Some(Self::WordWrap),
+            6 => Some(Self::FiletreePanel),
             _ => None,
         }
     }
@@ -53,6 +56,7 @@ impl SettingsField {
             Self::TabSize => "Tab Size",
             Self::CursorBlink => "Cursor Blink",
             Self::WordWrap => "Word Wrap",
+            Self::FiletreePanel => "Filetree Panel",
         }
     }
 
@@ -69,6 +73,15 @@ impl SettingsField {
             }
             .to_string(),
             Self::WordWrap => if config.editor.word_wrap { "on" } else { "off" }.to_string(),
+            Self::FiletreePanel => config
+                .modules
+                .filetree
+                .panel
+                .as_deref()
+                .and_then(PanelSlot::from_config)
+                .unwrap_or(PanelSlot::Left)
+                .label()
+                .to_string(),
         }
     }
 }
@@ -517,6 +530,18 @@ impl SettingsView {
                 self.editing = Some(field);
                 false
             }
+            SettingsField::FiletreePanel => {
+                let current = config
+                    .modules
+                    .filetree
+                    .panel
+                    .as_deref()
+                    .and_then(PanelSlot::from_config)
+                    .unwrap_or(PanelSlot::Left);
+                let next = current.next();
+                config.modules.filetree.panel = Some(next.label().to_string());
+                true
+            }
         }
     }
 }
@@ -686,6 +711,28 @@ mod tests {
         let changed = view.commit_edit(&mut config);
         assert!(changed);
         assert_eq!(config.editor.font_family, "Fira Code");
+    }
+
+    #[test]
+    fn activate_filetree_panel_cycles() {
+        let mut view = SettingsView::new();
+        let mut config = NyxConfig::default();
+        assert_eq!(config.modules.filetree.panel.as_deref(), Some("left"));
+
+        view.activate_field(SettingsField::FiletreePanel, &mut config);
+        assert_eq!(config.modules.filetree.panel.as_deref(), Some("bottom"));
+
+        view.activate_field(SettingsField::FiletreePanel, &mut config);
+        assert_eq!(config.modules.filetree.panel.as_deref(), Some("right"));
+
+        view.activate_field(SettingsField::FiletreePanel, &mut config);
+        assert_eq!(config.modules.filetree.panel.as_deref(), Some("left"));
+    }
+
+    #[test]
+    fn display_value_filetree_panel() {
+        let config = NyxConfig::default();
+        assert_eq!(SettingsField::FiletreePanel.display_value(&config), "left");
     }
 
     #[test]
