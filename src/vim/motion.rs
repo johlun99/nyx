@@ -55,6 +55,17 @@ pub fn execute_motion(buffer: &mut TextBuffer, motion: &MotionKind) {
     }
 }
 
+/// Classify a character into word categories (Vim `w` semantics).
+fn char_class(c: char) -> u8 {
+    if c.is_whitespace() {
+        0
+    } else if c.is_alphanumeric() || c == '_' {
+        1
+    } else {
+        2 // punctuation
+    }
+}
+
 fn word_forward(buffer: &mut TextBuffer) {
     let content_len = buffer.line_content_len(buffer.cursor_line());
     let content: Vec<char> = buffer
@@ -68,9 +79,10 @@ fn word_forward(buffer: &mut TextBuffer) {
     }
 
     let mut col = buffer.cursor_col().min(content.len().saturating_sub(1));
+    let start_class = char_class(content[col]);
 
-    // Skip current word (whitespace-delimited, i.e. WORD motion)
-    while col < content.len() && !content[col].is_whitespace() {
+    // Skip current word class (same category of chars)
+    while col < content.len() && char_class(content[col]) == start_class {
         col += 1;
     }
     // Skip whitespace
@@ -117,8 +129,9 @@ fn word_backward(buffer: &mut TextBuffer) {
     while c > 0 && content[c].is_whitespace() {
         c -= 1;
     }
-    // Skip word
-    while c > 0 && !content[c - 1].is_whitespace() {
+    // Skip same char class
+    let cls = char_class(content[c]);
+    while c > 0 && char_class(content[c - 1]) == cls {
         c -= 1;
     }
 
@@ -143,9 +156,12 @@ fn word_end(buffer: &mut TextBuffer) {
     while col < content.len() && content[col].is_whitespace() {
         col += 1;
     }
-    // Go to end of word
-    while col < content.len().saturating_sub(1) && !content[col + 1].is_whitespace() {
-        col += 1;
+    // Go to end of current char class
+    if col < content.len() {
+        let cls = char_class(content[col]);
+        while col < content.len().saturating_sub(1) && char_class(content[col + 1]) == cls {
+            col += 1;
+        }
     }
 
     buffer.set_cursor(buffer.cursor_line(), col);
@@ -331,5 +347,52 @@ mod tests {
         execute_motion(&mut buf, &MotionKind::WordBackward);
         execute_motion(&mut buf, &MotionKind::WordEnd);
         assert_eq!(buf.cursor_col(), 0);
+    }
+
+    #[test]
+    fn motion_word_forward_stops_at_punctuation() {
+        let mut buf = TextBuffer::from_text("print(answer)");
+        // cursor on 'p', w should stop at '('
+        execute_motion(&mut buf, &MotionKind::WordForward);
+        assert_eq!(buf.cursor_col(), 5); // '('
+    }
+
+    #[test]
+    fn motion_word_forward_from_punctuation() {
+        let mut buf = TextBuffer::from_text("print(answer)");
+        buf.set_cursor(0, 5); // on '('
+        execute_motion(&mut buf, &MotionKind::WordForward);
+        assert_eq!(buf.cursor_col(), 6); // 'a' of answer
+    }
+
+    #[test]
+    fn motion_word_backward_stops_at_punctuation() {
+        let mut buf = TextBuffer::from_text("print(answer)");
+        buf.set_cursor(0, 10); // on 'e' in answer
+        execute_motion(&mut buf, &MotionKind::WordBackward);
+        assert_eq!(buf.cursor_col(), 6); // 'a' of answer
+    }
+
+    #[test]
+    fn motion_word_backward_from_punctuation() {
+        let mut buf = TextBuffer::from_text("print(answer)");
+        buf.set_cursor(0, 5); // on '('
+        execute_motion(&mut buf, &MotionKind::WordBackward);
+        assert_eq!(buf.cursor_col(), 0); // 'p' of print
+    }
+
+    #[test]
+    fn motion_word_end_stops_at_punctuation_boundary() {
+        let mut buf = TextBuffer::from_text("print(answer)");
+        // cursor on 'p', e should stop at 't' (end of 'print')
+        execute_motion(&mut buf, &MotionKind::WordEnd);
+        assert_eq!(buf.cursor_col(), 4); // 't'
+    }
+
+    #[test]
+    fn motion_word_forward_multiple_punctuation() {
+        let mut buf = TextBuffer::from_text("foo::bar");
+        execute_motion(&mut buf, &MotionKind::WordForward);
+        assert_eq!(buf.cursor_col(), 3); // first ':'
     }
 }
