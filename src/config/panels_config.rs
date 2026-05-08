@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use crate::views::PanelSlot;
@@ -88,6 +91,55 @@ impl PanelsConfig {
             if t.modules.is_empty() {
                 tabs.remove(tab);
             }
+        }
+    }
+
+    const FILE_NAME: &'static str = "panels.json";
+
+    pub fn load(dir: &Path) -> Self {
+        let path = dir.join(Self::FILE_NAME);
+        if path.exists() {
+            match std::fs::read_to_string(&path) {
+                Ok(content) => match serde_json::from_str::<PanelsConfig>(&content) {
+                    Ok(mut config) => {
+                        config.dedup();
+                        return config;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to parse {}: {}. Using defaults.",
+                            path.display(),
+                            e
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to read {}: {}. Using defaults.", path.display(), e);
+                }
+            }
+        }
+        Self::default()
+    }
+
+    pub fn save(&self, dir: &Path) -> Result<(), String> {
+        let path = dir.join(Self::FILE_NAME);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+        }
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize panels config: {}", e))?;
+        std::fs::write(&path, json).map_err(|e| format!("Failed to write panels config: {}", e))?;
+        Ok(())
+    }
+
+    fn dedup(&mut self) {
+        let mut seen = HashSet::new();
+        for tabs in [&mut self.left, &mut self.bottom, &mut self.right] {
+            for tab in tabs.iter_mut() {
+                tab.modules.retain(|m| seen.insert(m.clone()));
+            }
+            tabs.retain(|tab| !tab.modules.is_empty());
         }
     }
 }
@@ -237,5 +289,46 @@ mod tests {
         config.remove_module(PanelSlot::Left, 0, "filetree");
         assert_eq!(config.left.len(), 1);
         assert_eq!(config.left[0].modules, vec!["git"]);
+    }
+
+    #[test]
+    fn load_missing_file_returns_default() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = PanelsConfig::load(tmp.path());
+        assert_eq!(config.left.len(), 1);
+        assert_eq!(config.left[0].modules, vec!["filetree"]);
+    }
+
+    #[test]
+    fn save_and_load_roundtrip() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config = PanelsConfig {
+            left: vec![PanelTab {
+                modules: vec!["filetree".into(), "git".into()],
+            }],
+            bottom: vec![PanelTab {
+                modules: vec!["terminal".into()],
+            }],
+            right: vec![],
+        };
+        config.save(tmp.path()).unwrap();
+        let loaded = PanelsConfig::load(tmp.path());
+        assert_eq!(loaded.left[0].modules, vec!["filetree", "git"]);
+        assert_eq!(loaded.bottom[0].modules, vec!["terminal"]);
+    }
+
+    #[test]
+    fn dedup_removes_second_occurrence() {
+        let json = r#"{
+            "left": [["filetree"]],
+            "bottom": [["filetree", "git"]],
+            "right": [["git"]]
+        }"#;
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("panels.json"), json).unwrap();
+        let config = PanelsConfig::load(tmp.path());
+        assert_eq!(config.left[0].modules, vec!["filetree"]);
+        assert_eq!(config.bottom[0].modules, vec!["git"]);
+        assert!(config.right.is_empty());
     }
 }
