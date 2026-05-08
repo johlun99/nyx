@@ -477,6 +477,17 @@ impl NyxApp {
                     SettingsAction::ConfigChanged => {
                         self.editor.set_tab_size(self.config.editor.tab_size);
                         let _ = self.config.save(&NyxConfig::config_path());
+                        if self.settings_view.active_tab == SettingsTab::Panels {
+                            let config_dir = NyxConfig::config_dir();
+                            if let Err(e) = self.panels_config.save(&config_dir) {
+                                tracing::warn!("Failed to save panels config: {}", e);
+                            }
+                            self.left_panel_visible = !self.panels_config.is_empty(PanelSlot::Left);
+                            self.bottom_panel_visible =
+                                !self.panels_config.is_empty(PanelSlot::Bottom);
+                            self.right_panel_visible =
+                                !self.panels_config.is_empty(PanelSlot::Right);
+                        }
                     }
                     SettingsAction::ServerToggled => {
                         self.lsp_document_opened = false;
