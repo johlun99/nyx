@@ -3,6 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::schema::ModulesConfig;
 use crate::views::PanelSlot;
 
 /// A single tab within a panel, containing one or more stacked modules.
@@ -141,6 +142,35 @@ impl PanelsConfig {
             }
             tabs.retain(|tab| !tab.modules.is_empty());
         }
+    }
+
+    pub fn migrate_from_modules(modules: &ModulesConfig) -> Self {
+        let mut config = Self {
+            left: vec![],
+            bottom: vec![],
+            right: vec![],
+        };
+        let entries: &[(&str, &crate::config::schema::ModuleEntry)] = &[
+            ("filetree", &modules.filetree),
+            ("terminal", &modules.terminal),
+            ("git", &modules.git),
+            ("search", &modules.search),
+        ];
+        for (name, entry) in entries {
+            if !entry.enabled {
+                continue;
+            }
+            let slot_str = entry.panel.as_deref().unwrap_or("left");
+            let tabs = match slot_str {
+                "bottom" => &mut config.bottom,
+                "right" => &mut config.right,
+                _ => &mut config.left,
+            };
+            tabs.push(PanelTab {
+                modules: vec![name.to_string()],
+            });
+        }
+        config
     }
 }
 
@@ -329,6 +359,37 @@ mod tests {
         let config = PanelsConfig::load(tmp.path());
         assert_eq!(config.left[0].modules, vec!["filetree"]);
         assert_eq!(config.bottom[0].modules, vec!["git"]);
+        assert!(config.right.is_empty());
+    }
+
+    #[test]
+    fn migration_from_modules_config() {
+        use crate::config::schema::{ModuleEntry, ModulesConfig};
+
+        let modules = ModulesConfig {
+            filetree: ModuleEntry {
+                enabled: true,
+                panel: Some("left".into()),
+            },
+            terminal: ModuleEntry {
+                enabled: true,
+                panel: Some("bottom".into()),
+            },
+            git: ModuleEntry {
+                enabled: false,
+                panel: Some("right".into()),
+            },
+            search: ModuleEntry {
+                enabled: true,
+                panel: None,
+            },
+        };
+        let config = PanelsConfig::migrate_from_modules(&modules);
+        assert_eq!(config.left.len(), 2);
+        assert_eq!(config.left[0].modules, vec!["filetree"]);
+        assert_eq!(config.left[1].modules, vec!["search"]);
+        assert_eq!(config.bottom.len(), 1);
+        assert_eq!(config.bottom[0].modules, vec!["terminal"]);
         assert!(config.right.is_empty());
     }
 }
