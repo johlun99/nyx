@@ -31,6 +31,7 @@ pub enum PanelSlot {
 }
 
 impl PanelSlot {
+    #[allow(dead_code)]
     pub fn from_config(s: &str) -> Option<Self> {
         match s {
             "left" => Some(Self::Left),

@@ -36,7 +36,6 @@ impl Default for PanelsConfig {
     }
 }
 
-#[allow(dead_code)]
 impl PanelsConfig {
     fn slots_mut(&mut self, slot: PanelSlot) -> &mut Vec<PanelTab> {
         match slot {

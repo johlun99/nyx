@@ -49,6 +49,8 @@ pub struct NyxApp {
     command_palette: CommandPalette,
     command_palette_open: bool,
     panels_config: PanelsConfig,
+    /// Active tab index per panel: [left, bottom, right]
+    panel_active_tab: [usize; 3],
 }
 
 impl NyxApp {
@@ -66,7 +68,17 @@ impl NyxApp {
             .and_then(|p| std::path::Path::new(p).parent().map(|d| d.to_path_buf()))
             .or_else(|| std::env::current_dir().ok());
 
-        let left_panel_visible = false;
+        let config_dir = NyxConfig::config_dir();
+        let panels_config = {
+            let path = config_dir.join("panels.json");
+            if path.exists() {
+                PanelsConfig::load(&config_dir)
+            } else {
+                let migrated = PanelsConfig::migrate_from_modules(&config.modules);
+                let _ = migrated.save(&config_dir);
+                migrated
+            }
+        };
 
         Self {
             editor,
@@ -83,24 +95,35 @@ impl NyxApp {
             last_completion_request: None,
             last_lsp_error_shown: None,
             panel_focus: PanelFocus::default(),
-            left_panel_visible,
-            bottom_panel_visible: false,
-            right_panel_visible: false,
+            left_panel_visible: !panels_config.is_empty(PanelSlot::Left),
+            bottom_panel_visible: !panels_config.is_empty(PanelSlot::Bottom),
+            right_panel_visible: !panels_config.is_empty(PanelSlot::Right),
             filetree: FiletreeModule::new(filetree_root),
             command_palette: CommandPalette::new(),
             command_palette_open: false,
-            panels_config: PanelsConfig::default(),
+            panels_config,
+            panel_active_tab: [0; 3],
         }
     }
 
-    fn filetree_panel(&self) -> PanelSlot {
-        self.config
-            .modules
-            .filetree
-            .panel
-            .as_deref()
-            .and_then(PanelSlot::from_config)
+    fn filetree_slot(&self) -> PanelSlot {
+        [PanelSlot::Left, PanelSlot::Bottom, PanelSlot::Right]
+            .into_iter()
+            .find(|s| {
+                self.panels_config
+                    .tabs_for(*s)
+                    .iter()
+                    .any(|t| t.modules.iter().any(|m| m == "filetree"))
+            })
             .unwrap_or(PanelSlot::Left)
+    }
+
+    fn capitalize(s: &str) -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+        }
     }
 
     fn panel_visible(&self, slot: PanelSlot) -> bool {
@@ -136,16 +159,37 @@ impl NyxApp {
         }
     }
 
-    fn render_empty_panel(ui: &mut egui::Ui, theme: &Theme) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(40.0);
-            ui.label(
-                egui::RichText::new("No module assigned")
-                    .color(theme.line_number)
-                    .size(12.0)
-                    .italics(),
-            );
-        });
+    fn render_panel_modules(
+        &mut self,
+        ui: &mut egui::Ui,
+        slot: PanelSlot,
+        slot_index: usize,
+        focused: bool,
+    ) -> ModuleAction {
+        let tabs = self.panels_config.tabs_for(slot);
+        let active_tab_idx = self.panel_active_tab[slot_index];
+        if let Some(tab) = tabs.get(active_tab_idx).or_else(|| tabs.first()) {
+            for module in &tab.modules.clone() {
+                match module.as_str() {
+                    "filetree" => {
+                        let action = self.filetree.render(ui, &self.theme, focused);
+                        if action != ModuleAction::None {
+                            return action;
+                        }
+                    }
+                    other => {
+                        let label = format!("{} — coming soon", Self::capitalize(other));
+                        ui.label(
+                            egui::RichText::new(label)
+                                .color(self.theme.line_number)
+                                .size(12.0)
+                                .italics(),
+                        );
+                    }
+                }
+            }
+        }
+        ModuleAction::None
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
@@ -325,7 +369,7 @@ impl NyxApp {
             }
         });
         if toggle_panel {
-            let slot = self.filetree_panel();
+            let slot = self.filetree_slot();
             let new_vis = !self.panel_visible(slot);
             self.set_panel_visible(slot, new_vis);
             if !new_vis {
@@ -341,7 +385,7 @@ impl NyxApp {
             return;
         }
         if let Some(slot) = focus_panel_slot {
-            if self.active_view == AppView::Editor {
+            if self.active_view == AppView::Editor && !self.panels_config.is_empty(slot) {
                 let target_focus = Self::panel_focus_for_slot(slot);
                 if self.panel_focus == target_focus {
                     // Already focused — hide panel
@@ -416,8 +460,21 @@ impl NyxApp {
                     self.panel_focus = PanelFocus::Editor;
                     return;
                 }
-                // Route input to the module assigned to this slot
-                if slot == self.filetree_panel() {
+                // Route input to modules in the focused panel
+                let slot_index = match slot {
+                    PanelSlot::Left => 0,
+                    PanelSlot::Bottom => 1,
+                    PanelSlot::Right => 2,
+                };
+                let active_tab_idx = self.panel_active_tab[slot_index];
+                let has_filetree = self
+                    .panels_config
+                    .tabs_for(slot)
+                    .get(active_tab_idx)
+                    .or_else(|| self.panels_config.tabs_for(slot).first())
+                    .map(|tab| tab.modules.iter().any(|m| m == "filetree"))
+                    .unwrap_or(false);
+                if has_filetree {
                     let action = self.filetree.handle_input(ctx);
                     match action {
                         ModuleAction::OpenFile(path) => {
@@ -863,7 +920,7 @@ impl NyxApp {
         match action {
             PaletteAction::None => {}
             PaletteAction::ToggleFiletree => {
-                let slot = self.filetree_panel();
+                let slot = self.filetree_slot();
                 let new_vis = !self.panel_visible(slot);
                 self.set_panel_visible(slot, new_vis);
                 if !new_vis {
@@ -961,7 +1018,6 @@ impl eframe::App for NyxApp {
         let mut panel_clicked = None;
         if self.active_view == AppView::Editor {
             let panel_bg = self.theme.background;
-            let ft_slot = self.filetree_panel();
 
             // Detect primary click position for panel focus
             let click_pos = ctx.input(|i| {
@@ -980,10 +1036,9 @@ impl eframe::App for NyxApp {
                     .width_range(150.0..=400.0)
                     .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
                     .show_animated(ctx, true, |ui| {
-                        if ft_slot == PanelSlot::Left {
-                            panel_action = self.filetree.render(ui, &self.theme, focused);
-                        } else {
-                            Self::render_empty_panel(ui, &self.theme);
+                        let action = self.render_panel_modules(ui, PanelSlot::Left, 0, focused);
+                        if action != ModuleAction::None {
+                            panel_action = action;
                         }
                     })
                 {
@@ -1003,10 +1058,9 @@ impl eframe::App for NyxApp {
                     .width_range(150.0..=400.0)
                     .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
                     .show_animated(ctx, true, |ui| {
-                        if ft_slot == PanelSlot::Right {
-                            panel_action = self.filetree.render(ui, &self.theme, focused);
-                        } else {
-                            Self::render_empty_panel(ui, &self.theme);
+                        let action = self.render_panel_modules(ui, PanelSlot::Right, 2, focused);
+                        if action != ModuleAction::None {
+                            panel_action = action;
                         }
                     })
                 {
@@ -1026,10 +1080,9 @@ impl eframe::App for NyxApp {
                     .height_range(100.0..=300.0)
                     .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
                     .show_animated(ctx, true, |ui| {
-                        if ft_slot == PanelSlot::Bottom {
-                            panel_action = self.filetree.render(ui, &self.theme, focused);
-                        } else {
-                            Self::render_empty_panel(ui, &self.theme);
+                        let action = self.render_panel_modules(ui, PanelSlot::Bottom, 1, focused);
+                        if action != ModuleAction::None {
+                            panel_action = action;
                         }
                     })
                 {
