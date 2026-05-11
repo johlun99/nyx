@@ -52,6 +52,8 @@ pub struct NyxApp {
     panels_config: PanelsConfig,
     /// Active tab index per panel: [left, bottom, right]
     panel_active_tab: [usize; 3],
+    /// Split ratio between modules sharing a tab: [left, bottom, right]
+    panel_split_ratio: [f32; 3],
 }
 
 impl NyxApp {
@@ -105,6 +107,7 @@ impl NyxApp {
             command_palette_open: false,
             panels_config,
             panel_active_tab: [0; 3],
+            panel_split_ratio: [0.5; 3],
         }
     }
 
@@ -211,33 +214,97 @@ impl NyxApp {
         }
         let tabs = self.panels_config.tabs_for(slot);
         if let Some(tab) = tabs.get(active_tab_idx).or_else(|| tabs.first()) {
-            for module in &tab.modules.clone() {
-                match module.as_str() {
-                    "filetree" => {
-                        let action = self.filetree.render(ui, &self.theme, focused);
-                        if action != ModuleAction::None {
-                            return action;
-                        }
+            let modules = tab.modules.clone();
+
+            if modules.len() <= 1 {
+                // Single module — give it all the space
+                if let Some(module) = modules.first() {
+                    let action = self.render_single_module(ui, module, focused);
+                    if action != ModuleAction::None {
+                        return action;
                     }
-                    "terminal" => {
-                        let action = self.terminal.render(ui, &self.theme, focused);
-                        if action != ModuleAction::None {
-                            return action;
-                        }
-                    }
-                    other => {
-                        let label = format!("{} — coming soon", Self::capitalize(other));
-                        ui.label(
-                            egui::RichText::new(label)
-                                .color(self.theme.line_number)
-                                .size(12.0)
-                                .italics(),
-                        );
+                }
+            } else {
+                // Multiple modules — split with draggable divider
+                let available = ui.available_height();
+                let divider_h = 6.0;
+                let ratio = self.panel_split_ratio[slot_index];
+                let usable = available - divider_h;
+                let top_h = (usable * ratio).max(40.0);
+                let bottom_h = (usable - top_h).max(40.0);
+
+                // First module
+                let action = ui
+                    .allocate_ui(egui::vec2(ui.available_width(), top_h), |ui| {
+                        self.render_single_module(ui, &modules[0], focused)
+                    })
+                    .inner;
+                if action != ModuleAction::None {
+                    return action;
+                }
+
+                // Draggable divider
+                let divider_rect = ui.allocate_space(egui::vec2(ui.available_width(), divider_h));
+                let divider_id = ui.id().with("panel_split").with(slot_index);
+                let response = ui.interact(divider_rect.1, divider_id, egui::Sense::drag());
+                // Draw divider line
+                let center_y = divider_rect.1.center().y;
+                let line_rect = egui::Rect::from_min_max(
+                    egui::pos2(divider_rect.1.left() + 4.0, center_y - 0.5),
+                    egui::pos2(divider_rect.1.right() - 4.0, center_y + 0.5),
+                );
+                let line_color = if response.hovered() || response.dragged() {
+                    self.theme.syntax.keyword
+                } else {
+                    self.theme.line_number
+                };
+                ui.painter().rect_filled(line_rect, 0.0, line_color);
+                if response.hovered() || response.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+                if response.dragged() {
+                    let delta = response.drag_delta().y;
+                    let new_ratio = ((ratio * usable + delta) / usable)
+                        .clamp(40.0 / usable, 1.0 - 40.0 / usable);
+                    self.panel_split_ratio[slot_index] = new_ratio;
+                }
+
+                // Remaining modules
+                for module in &modules[1..] {
+                    let action = ui
+                        .allocate_ui(egui::vec2(ui.available_width(), bottom_h), |ui| {
+                            self.render_single_module(ui, module, focused)
+                        })
+                        .inner;
+                    if action != ModuleAction::None {
+                        return action;
                     }
                 }
             }
         }
         ModuleAction::None
+    }
+
+    fn render_single_module(
+        &mut self,
+        ui: &mut egui::Ui,
+        module: &str,
+        focused: bool,
+    ) -> ModuleAction {
+        match module {
+            "filetree" => self.filetree.render(ui, &self.theme, focused),
+            "terminal" => self.terminal.render(ui, &self.theme, focused),
+            other => {
+                let label = format!("{} — coming soon", Self::capitalize(other));
+                ui.label(
+                    egui::RichText::new(label)
+                        .color(self.theme.line_number)
+                        .size(12.0)
+                        .italics(),
+                );
+                ModuleAction::None
+            }
+        }
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
@@ -1124,7 +1191,7 @@ impl eframe::App for NyxApp {
                 let focused = self.panel_focus == PanelFocus::LeftPanel;
                 if let Some(resp) = egui::SidePanel::left("left_panel")
                     .default_width(220.0)
-                    .width_range(150.0..=400.0)
+                    .width_range(50.0..=f32::INFINITY)
                     .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
                     .show_animated(ctx, true, |ui| {
                         let action = self.render_panel_modules(ui, PanelSlot::Left, 0, focused);
@@ -1146,7 +1213,7 @@ impl eframe::App for NyxApp {
                 let focused = self.panel_focus == PanelFocus::RightPanel;
                 if let Some(resp) = egui::SidePanel::right("right_panel")
                     .default_width(220.0)
-                    .width_range(150.0..=400.0)
+                    .width_range(50.0..=f32::INFINITY)
                     .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
                     .show_animated(ctx, true, |ui| {
                         let action = self.render_panel_modules(ui, PanelSlot::Right, 2, focused);
@@ -1168,7 +1235,8 @@ impl eframe::App for NyxApp {
                 let focused = self.panel_focus == PanelFocus::BottomPanel;
                 if let Some(resp) = egui::TopBottomPanel::bottom("bottom_panel")
                     .default_height(200.0)
-                    .height_range(100.0..=300.0)
+                    .height_range(50.0..=f32::INFINITY)
+                    .resizable(true)
                     .frame(egui::Frame::NONE.fill(panel_bg).inner_margin(8.0))
                     .show_animated(ctx, true, |ui| {
                         let action = self.render_panel_modules(ui, PanelSlot::Bottom, 1, focused);
