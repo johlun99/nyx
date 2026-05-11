@@ -4,7 +4,10 @@ use crate::config::panels_config::{PanelTab, PanelsConfig};
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::lsp::LspManager;
-use crate::modules::{CommandPalette, FiletreeModule, ModuleAction, PaletteAction, TerminalModule};
+use crate::modules::{
+    CommandPalette, FiletreeModule, ModuleAction, PaletteAction, SearchAction, SearchMode,
+    SearchPopup, TerminalModule,
+};
 use crate::renderer::{EditorView, Theme};
 use crate::syntax::languages::language_for_extension;
 use crate::views::{
@@ -49,6 +52,8 @@ pub struct NyxApp {
     terminal: TerminalModule,
     command_palette: CommandPalette,
     command_palette_open: bool,
+    search_popup: SearchPopup,
+    search_popup_open: bool,
     panels_config: PanelsConfig,
     /// Active tab index per panel: [left, bottom, right]
     panel_active_tab: [usize; 3],
@@ -101,6 +106,8 @@ impl NyxApp {
             left_panel_visible: false,
             bottom_panel_visible: false,
             right_panel_visible: false,
+            search_popup: SearchPopup::new(filetree_root.clone()),
+            search_popup_open: false,
             filetree: FiletreeModule::new(filetree_root),
             terminal: TerminalModule::new(std::env::current_dir().unwrap_or_default()),
             command_palette: CommandPalette::new(),
@@ -320,6 +327,24 @@ impl NyxApp {
             return;
         }
 
+        // --- Search popup interception ---
+        if self.search_popup_open {
+            let (should_close, action) = self.search_popup.handle_input(ctx);
+            if should_close {
+                self.search_popup_open = false;
+                match action {
+                    SearchAction::OpenFile(path) => self.open_file(&path),
+                    SearchAction::OpenFileAtLine(path, line, col) => {
+                        self.open_file(&path);
+                        let target_line = line.saturating_sub(1);
+                        self.editor.buffer.set_cursor(target_line, col);
+                    }
+                    SearchAction::None => {}
+                }
+            }
+            return;
+        }
+
         // --- Completion input interception ---
         if self.lsp_manager.completion.is_some() && self.active_view == AppView::Editor {
             let has_visible_completion_items = self
@@ -443,6 +468,8 @@ impl NyxApp {
         let mut view_switch: Option<AppView> = None;
         let mut toggle_panel = false;
         let mut toggle_palette = false;
+        let mut open_search_content = false;
+        let mut open_search_files = false;
         let mut focus_panel_slot: Option<PanelSlot> = None;
         ctx.input(|input| {
             if input.modifiers.ctrl && input.key_pressed(egui::Key::H) {
@@ -459,6 +486,13 @@ impl NyxApp {
             }
             if input.modifiers.command && input.key_pressed(egui::Key::P) {
                 toggle_palette = true;
+            }
+            if input.modifiers.command && input.key_pressed(egui::Key::F) {
+                if input.modifiers.shift {
+                    open_search_files = true;
+                } else {
+                    open_search_content = true;
+                }
             }
             if input.modifiers.command && input.key_pressed(egui::Key::Comma) {
                 view_switch = Some(match self.active_view {
@@ -496,6 +530,23 @@ impl NyxApp {
             self.command_palette_open = !self.command_palette_open;
             if self.command_palette_open {
                 self.command_palette.reset();
+            }
+            return;
+        }
+        if open_search_content || open_search_files {
+            let mode = if open_search_files {
+                SearchMode::Files
+            } else {
+                SearchMode::Content
+            };
+            if self.search_popup_open {
+                // Already open — just switch mode
+                self.search_popup.set_mode(mode);
+            } else {
+                self.search_popup_open = true;
+                self.search_popup.refresh_cache();
+                self.search_popup.reset();
+                self.search_popup.set_mode(mode);
             }
             return;
         }
@@ -1319,6 +1370,11 @@ impl eframe::App for NyxApp {
         // Command palette overlay (rendered on top of everything)
         if self.command_palette_open {
             self.command_palette.render(ctx, &self.theme);
+        }
+
+        // Search popup overlay
+        if self.search_popup_open {
+            self.search_popup.render(ctx, &self.theme);
         }
     }
 }
