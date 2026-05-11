@@ -4,7 +4,7 @@ use crate::config::panels_config::{PanelTab, PanelsConfig};
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::lsp::LspManager;
-use crate::modules::{CommandPalette, FiletreeModule, ModuleAction, PaletteAction};
+use crate::modules::{CommandPalette, FiletreeModule, ModuleAction, PaletteAction, TerminalModule};
 use crate::renderer::{EditorView, Theme};
 use crate::syntax::languages::language_for_extension;
 use crate::views::{
@@ -46,6 +46,7 @@ pub struct NyxApp {
     bottom_panel_visible: bool,
     right_panel_visible: bool,
     filetree: FiletreeModule,
+    terminal: TerminalModule,
     command_palette: CommandPalette,
     command_palette_open: bool,
     panels_config: PanelsConfig,
@@ -99,6 +100,7 @@ impl NyxApp {
             bottom_panel_visible: false,
             right_panel_visible: false,
             filetree: FiletreeModule::new(filetree_root),
+            terminal: TerminalModule::new(std::env::current_dir().unwrap_or_default()),
             command_palette: CommandPalette::new(),
             command_palette_open: false,
             panels_config,
@@ -213,6 +215,12 @@ impl NyxApp {
                 match module.as_str() {
                     "filetree" => {
                         let action = self.filetree.render(ui, &self.theme, focused);
+                        if action != ModuleAction::None {
+                            return action;
+                        }
+                    }
+                    "terminal" => {
+                        let action = self.terminal.render(ui, &self.theme, focused);
                         if action != ModuleAction::None {
                             return action;
                         }
