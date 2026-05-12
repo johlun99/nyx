@@ -5,14 +5,14 @@ use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::lsp::LspManager;
 use crate::modules::{
-    CommandPalette, FiletreeModule, ModuleAction, PaletteAction, SearchAction, SearchMode,
-    SearchPopup, TerminalModule,
+    CommandPalette, FiletreeModule, GitModule, ModuleAction, PaletteAction, SearchAction,
+    SearchMode, SearchPopup, TerminalModule,
 };
 use crate::renderer::{EditorView, Theme};
 use crate::syntax::languages::language_for_extension;
 use crate::views::{
-    AppView, KeybindingsView, LspServersView, PanelFocus, PanelSlot, SettingsAction, SettingsTab,
-    SettingsView,
+    AppView, DiffInputResult, DiffMode, DiffView, KeybindingsView, LspServersView, PanelFocus,
+    PanelSlot, SettingsAction, SettingsTab, SettingsView,
 };
 use crate::vim::{Mode, VimAction, VisualKind};
 use eframe::egui;
@@ -49,11 +49,13 @@ pub struct NyxApp {
     bottom_panel_visible: bool,
     right_panel_visible: bool,
     filetree: FiletreeModule,
+    git: GitModule,
     terminal: TerminalModule,
     command_palette: CommandPalette,
     command_palette_open: bool,
     search_popup: SearchPopup,
     search_popup_open: bool,
+    diff_view: Option<DiffView>,
     panels_config: PanelsConfig,
     /// Active tab index per panel: [left, bottom, right]
     panel_active_tab: [usize; 3],
@@ -108,6 +110,8 @@ impl NyxApp {
             right_panel_visible: false,
             search_popup: SearchPopup::new(filetree_root.clone()),
             search_popup_open: false,
+            diff_view: None,
+            git: GitModule::new(filetree_root.clone()),
             filetree: FiletreeModule::new(filetree_root),
             terminal: TerminalModule::new(std::env::current_dir().unwrap_or_default()),
             command_palette: CommandPalette::new(),
@@ -128,6 +132,14 @@ impl NyxApp {
                     .any(|t| t.modules.iter().any(|m| m == "filetree"))
             })
             .unwrap_or(PanelSlot::Left)
+    }
+
+    fn git_root(&self) -> Option<std::path::PathBuf> {
+        self.editor
+            .file_path
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).parent().map(|d| d.to_path_buf()))
+            .or_else(|| std::env::current_dir().ok())
     }
 
     fn capitalize(s: &str) -> String {
@@ -300,6 +312,7 @@ impl NyxApp {
     ) -> ModuleAction {
         match module {
             "filetree" => self.filetree.render(ui, &self.theme, focused),
+            "git" => self.git.render(ui, &self.theme, focused),
             "terminal" => self.terminal.render(ui, &self.theme, focused),
             other => {
                 let label = format!("{} — coming soon", Self::capitalize(other));
@@ -690,11 +703,50 @@ impl NyxApp {
                             self.open_file(&path);
                             self.panel_focus = PanelFocus::Editor;
                         }
+                        ModuleAction::None | ModuleAction::ViewDiff { .. } => {}
+                    }
+                }
+                let has_git = self
+                    .panels_config
+                    .tabs_for(slot)
+                    .get(active_tab_idx)
+                    .or_else(|| self.panels_config.tabs_for(slot).first())
+                    .map(|tab| tab.modules.iter().any(|m| m == "git"))
+                    .unwrap_or(false);
+                if has_git {
+                    let action = self.git.handle_input(ctx);
+                    match action {
+                        ModuleAction::OpenFile(path) => {
+                            self.open_file(&path);
+                            self.panel_focus = PanelFocus::Editor;
+                        }
+                        ModuleAction::ViewDiff { path, staged } => {
+                            if let Some(root) = self.git_root() {
+                                let mode = if staged {
+                                    DiffMode::Staged
+                                } else {
+                                    DiffMode::WorkingTree
+                                };
+                                self.diff_view = Some(DiffView::new(root, path, mode));
+                                self.panel_focus = PanelFocus::Editor;
+                            }
+                        }
                         ModuleAction::None => {}
                     }
                 }
                 return;
             }
+        }
+
+        // --- Diff view input ---
+        if let Some(ref mut dv) = self.diff_view {
+            match dv.handle_input(ctx) {
+                DiffInputResult::Close => {
+                    self.diff_view = None;
+                }
+                DiffInputResult::None => {}
+            }
+            return;
         }
 
         // --- Editor input ---
@@ -1307,30 +1359,56 @@ impl eframe::App for NyxApp {
         if let Some(focus) = panel_clicked {
             self.panel_focus = focus;
         }
-        if let ModuleAction::OpenFile(path) = panel_action {
-            self.open_file(&path);
-            self.panel_focus = PanelFocus::Editor;
+        match panel_action {
+            ModuleAction::OpenFile(path) => {
+                self.open_file(&path);
+                self.panel_focus = PanelFocus::Editor;
+            }
+            ModuleAction::ViewDiff { path, staged } => {
+                if let Some(root) = self.git_root() {
+                    let mode = if staged {
+                        DiffMode::Staged
+                    } else {
+                        DiffMode::WorkingTree
+                    };
+                    self.diff_view = Some(DiffView::new(root, path, mode));
+                    self.panel_focus = PanelFocus::Editor;
+                }
+            }
+            ModuleAction::None => {}
         }
 
         match self.active_view {
             AppView::Editor => {
-                self.editor.ensure_syntax_parsed();
-                let mut click = None;
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE)
-                    .show(ctx, |ui| {
-                        click = self.editor_view.render(
-                            ui,
-                            &self.editor,
-                            &self.theme,
-                            self.config.editor.font_size,
-                            self.config.editor.line_numbers,
-                            &self.lsp_manager,
-                        );
-                    });
-                if let Some(c) = click {
-                    self.editor.buffer.set_cursor(c.line, c.col);
-                    self.panel_focus = PanelFocus::Editor;
+                if let Some(ref dv) = self.diff_view {
+                    egui::CentralPanel::default()
+                        .frame(
+                            egui::Frame::NONE
+                                .fill(self.theme.background)
+                                .inner_margin(8.0),
+                        )
+                        .show(ctx, |ui| {
+                            dv.render(ui, &self.theme);
+                        });
+                } else {
+                    self.editor.ensure_syntax_parsed();
+                    let mut click = None;
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            click = self.editor_view.render(
+                                ui,
+                                &self.editor,
+                                &self.theme,
+                                self.config.editor.font_size,
+                                self.config.editor.line_numbers,
+                                &self.lsp_manager,
+                            );
+                        });
+                    if let Some(c) = click {
+                        self.editor.buffer.set_cursor(c.line, c.col);
+                        self.panel_focus = PanelFocus::Editor;
+                    }
                 }
             }
             AppView::Settings => {
