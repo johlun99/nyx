@@ -9,6 +9,7 @@ use crate::vim::motion::execute_motion;
 use crate::vim::operator::OperatorEngine;
 use crate::vim::search::SearchState;
 use crate::vim::{InsertEntry, KeyParser, Mode, VimAction, VisualOperatorAction};
+use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct LastAction {
@@ -74,6 +75,13 @@ impl JumpList {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitLineStatus {
+    Added,
+    Modified,
+    Removed,
+}
+
 pub struct Editor {
     pub buffer: TextBuffer,
     pub key_parser: KeyParser,
@@ -93,6 +101,7 @@ pub struct Editor {
     pub jump_list: JumpList,
     last_saved_text: String,
     pending_did_save: bool,
+    pub git_diff_lines: Vec<Option<GitLineStatus>>,
 }
 
 impl Editor {
@@ -145,6 +154,7 @@ impl Editor {
             jump_list: JumpList::new(),
             last_saved_text,
             pending_did_save: false,
+            git_diff_lines: Vec::new(),
         }
     }
 
@@ -741,6 +751,144 @@ impl Editor {
         }
     }
 
+    /// Parse `git diff --unified=0` output into a vec indexed by line number.
+    pub fn parse_git_diff_output(output: &str, total_lines: usize) -> Vec<Option<GitLineStatus>> {
+        let mut result = vec![None; total_lines];
+
+        for line in output.lines() {
+            if !line.starts_with("@@") {
+                continue;
+            }
+            // Parse @@ -old_start[,old_count] +new_start[,new_count] @@
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 3 {
+                continue;
+            }
+
+            let old_part = parts[1].trim_start_matches('-');
+            let new_part = parts[2].trim_start_matches('+');
+
+            let parse_range = |s: &str| -> (usize, usize) {
+                if let Some((start, count)) = s.split_once(',') {
+                    (start.parse().unwrap_or(0), count.parse().unwrap_or(1))
+                } else {
+                    (s.parse().unwrap_or(0), 1)
+                }
+            };
+
+            let (_old_start, old_count) = parse_range(old_part);
+            let (new_start, new_count) = parse_range(new_part);
+
+            if old_count == 0 {
+                // Pure addition
+                for line_num in new_start..new_start + new_count {
+                    if line_num > 0 && line_num - 1 < result.len() {
+                        result[line_num - 1] = Some(GitLineStatus::Added);
+                    }
+                }
+            } else if new_count == 0 {
+                // Pure deletion — mark the line after the deletion point
+                let marker_line = new_start;
+                if marker_line > 0 && marker_line - 1 < result.len() {
+                    result[marker_line - 1] = Some(GitLineStatus::Removed);
+                }
+            } else {
+                // Modification
+                for line_num in new_start..new_start + new_count {
+                    if line_num > 0 && line_num - 1 < result.len() {
+                        result[line_num - 1] = Some(GitLineStatus::Modified);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Refresh git diff status for the current file.
+    pub fn refresh_git_diff(&mut self) {
+        let path = match self.file_path {
+            Some(ref p) => p.clone(),
+            None => {
+                self.git_diff_lines.clear();
+                return;
+            }
+        };
+
+        // Canonicalize to handle relative paths (e.g. "src/main.rs")
+        let file_path = match std::fs::canonicalize(&path) {
+            Ok(p) => p,
+            Err(_) => {
+                self.git_diff_lines.clear();
+                return;
+            }
+        };
+        let dir = match file_path.parent() {
+            Some(d) => d,
+            None => {
+                self.git_diff_lines.clear();
+                return;
+            }
+        };
+
+        // Get git repo root
+        let root_output = Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(dir)
+            .output();
+        let root = match root_output {
+            Ok(ref o) if o.status.success() => {
+                String::from_utf8_lossy(&o.stdout).trim().to_string()
+            }
+            _ => {
+                self.git_diff_lines.clear();
+                return;
+            }
+        };
+
+        // Get relative path from repo root (canonicalize root too for consistency)
+        let root_path =
+            std::fs::canonicalize(&root).unwrap_or_else(|_| std::path::PathBuf::from(&root));
+        let relative = match file_path.strip_prefix(&root_path) {
+            Ok(r) => r.to_string_lossy().to_string(),
+            Err(_) => {
+                self.git_diff_lines.clear();
+                return;
+            }
+        };
+
+        let total_lines = self.buffer.line_count();
+
+        // Check if file is tracked by git
+        let is_tracked = Command::new("git")
+            .args(["ls-files", "--error-unmatch", "--", &relative])
+            .current_dir(&root_path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !is_tracked {
+            // Untracked file — mark every line as Added
+            self.git_diff_lines = vec![Some(GitLineStatus::Added); total_lines];
+            return;
+        }
+
+        let output = Command::new("git")
+            .args(["diff", "HEAD", "--unified=0", "--", &relative])
+            .current_dir(&root_path)
+            .output();
+
+        match output {
+            Ok(o) if o.status.success() => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                self.git_diff_lines = Self::parse_git_diff_output(&stdout, total_lines);
+            }
+            _ => {
+                self.git_diff_lines.clear();
+            }
+        }
+    }
+
     fn save_file(&mut self) -> bool {
         if let Some(ref path) = self.file_path {
             match crate::file_io::write_file(std::path::Path::new(path), &self.buffer.text()) {
@@ -989,5 +1137,63 @@ mod tests {
         editor.execute_command();
 
         assert!(editor.should_quit);
+    }
+
+    #[test]
+    fn parse_git_diff_empty_output() {
+        let result = Editor::parse_git_diff_output("", 10);
+        assert_eq!(result.len(), 10);
+        assert!(result.iter().all(|s| s.is_none()));
+    }
+
+    #[test]
+    fn parse_git_diff_additions_only() {
+        let output = "@@ -20,0 +21,2 @@\n+added line 1\n+added line 2\n";
+        let result = Editor::parse_git_diff_output(output, 30);
+        assert_eq!(result[20], Some(GitLineStatus::Added));
+        assert_eq!(result[21], Some(GitLineStatus::Added));
+        assert_eq!(result[19], None);
+        assert_eq!(result[22], None);
+    }
+
+    #[test]
+    fn parse_git_diff_deletions_only() {
+        let output = "@@ -30,2 +29,0 @@\n-deleted line 1\n-deleted line 2\n";
+        let result = Editor::parse_git_diff_output(output, 30);
+        // Deletion marker at line 29 (0-indexed: 28)
+        assert_eq!(result[28], Some(GitLineStatus::Removed));
+    }
+
+    #[test]
+    fn parse_git_diff_modifications() {
+        let output = "@@ -10,3 +10,5 @@\n-old\n-old\n-old\n+new\n+new\n+new\n+new\n+new\n";
+        let result = Editor::parse_git_diff_output(output, 20);
+        for i in 9..14 {
+            assert_eq!(result[i], Some(GitLineStatus::Modified));
+        }
+        assert_eq!(result[8], None);
+        assert_eq!(result[14], None);
+    }
+
+    #[test]
+    fn parse_git_diff_mixed_hunks() {
+        let output = "\
+@@ -5,0 +5,1 @@\n+new line\n\
+@@ -10,1 +11,1 @@\n-old\n+modified\n\
+@@ -20,1 +20,0 @@\n-deleted\n";
+        let result = Editor::parse_git_diff_output(output, 25);
+        assert_eq!(result[4], Some(GitLineStatus::Added));
+        assert_eq!(result[10], Some(GitLineStatus::Modified));
+        assert_eq!(result[19], Some(GitLineStatus::Removed));
+    }
+
+    #[test]
+    fn parse_git_diff_no_comma_count_is_one() {
+        // @@ -10 +10 @@ means old_count=1, new_count=1 → modification
+        let output = "@@ -10 +10 @@\n-old\n+new\n";
+        let result = Editor::parse_git_diff_output(output, 15);
+        assert_eq!(result[9], Some(GitLineStatus::Modified));
+        assert_eq!(result[8], None);
+        assert_eq!(result[10], None);
     }
 }

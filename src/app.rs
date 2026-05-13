@@ -61,6 +61,8 @@ pub struct NyxApp {
     panel_active_tab: [usize; 3],
     /// Split ratio between modules sharing a tab: [left, bottom, right]
     panel_split_ratio: [f32; 3],
+    /// Last time git diff gutter was refreshed
+    last_git_diff_refresh: Instant,
 }
 
 impl NyxApp {
@@ -90,7 +92,7 @@ impl NyxApp {
             }
         };
 
-        Self {
+        let mut app = Self {
             editor,
             editor_view: EditorView::new(),
             theme: Theme::default_dark(),
@@ -119,7 +121,10 @@ impl NyxApp {
             panels_config,
             panel_active_tab: [0; 3],
             panel_split_ratio: [0.5; 3],
-        }
+            last_git_diff_refresh: Instant::now(),
+        };
+        app.editor.refresh_git_diff();
+        app
     }
 
     fn filetree_slot(&self) -> PanelSlot {
@@ -1175,6 +1180,10 @@ impl NyxApp {
         // Reset editor state
         self.editor.key_parser.set_mode(Mode::Normal);
         self.editor.status_message = Some(format!("Opened {}", path));
+
+        // Refresh git diff gutter
+        self.editor.refresh_git_diff();
+        self.last_git_diff_refresh = Instant::now();
     }
 
     fn apply_palette_action(&mut self, action: PaletteAction) {
@@ -1266,12 +1275,20 @@ impl eframe::App for NyxApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
 
+        // Periodic git diff gutter refresh (every 5s)
+        if self.last_git_diff_refresh.elapsed() >= Duration::from_secs(5) {
+            self.editor.refresh_git_diff();
+            self.last_git_diff_refresh = Instant::now();
+        }
+
         self.handle_input(ctx);
         if self.editor.take_did_save_event() {
             if let Some(ref path) = self.editor.file_path {
                 let text = self.editor.buffer.text();
                 self.lsp_manager.notify_document_save(path, &text);
             }
+            self.editor.refresh_git_diff();
+            self.last_git_diff_refresh = Instant::now();
         }
 
         // Panels — must be rendered before CentralPanel per egui rules
