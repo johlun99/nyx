@@ -1,6 +1,6 @@
 // src/renderer/editor_view.rs
 use crate::config::{format_line_number, LineNumberMode};
-use crate::editor::Editor;
+use crate::editor::{Editor, GitLineStatus};
 use crate::lsp::{CodeActionState, CompletionState, HoverState, LspManager, NyxDiagnostic};
 use crate::renderer::status_bar::StatusBar;
 use crate::renderer::theme::Theme;
@@ -89,17 +89,19 @@ impl EditorView {
         let editor_height = available.y - status_height;
         let visible_lines = ((editor_height / line_height).ceil() as usize).max(1);
 
-        // Diagnostic gutter width (always reserve space to avoid layout shift)
+        // Gutter layout: | 3px git bar | 1px gap | diag icons | line numbers | 4px gap | text
+        let git_gutter_width = 4.0; // 3px bar + 1px gap
         let diag_gutter_width = char_width * 3.0;
+        let gutter_start = rect.min.x + git_gutter_width;
 
         // Dynamic gutter width based on line number mode
         let (gutter_width, text_x) = if line_number_mode == LineNumberMode::Off {
-            (0.0_f32, rect.min.x + diag_gutter_width + 4.0)
+            (0.0_f32, gutter_start + diag_gutter_width + 4.0)
         } else {
             let max_line = buffer.line_count();
             let digits = max_line.to_string().len().max(3);
             let width = (digits + 2) as f32 * char_width;
-            (width, rect.min.x + diag_gutter_width + width + 4.0)
+            (width, gutter_start + diag_gutter_width + width + 4.0)
         };
 
         let end_line = (self.scroll_offset + visible_lines).min(buffer.line_count());
@@ -118,7 +120,7 @@ impl EditorView {
                     ("\u{25b2}", theme.warning_fg) // triangle
                 };
                 painter.text(
-                    egui::pos2(rect.min.x + 2.0, y),
+                    egui::pos2(gutter_start + 2.0, y),
                     egui::Align2::LEFT_TOP,
                     icon,
                     font_id.clone(),
@@ -137,11 +139,31 @@ impl EditorView {
                     theme.line_number
                 };
                 painter.text(
-                    egui::pos2(rect.min.x + diag_gutter_width, y),
+                    egui::pos2(gutter_start + diag_gutter_width, y),
                     egui::Align2::LEFT_TOP,
                     &padded,
                     font_id.clone(),
                     num_color,
+                );
+            }
+
+            // Git diff gutter marker — thin bar at left edge, before line numbers
+            if let Some(Some(status)) = editor.git_diff_lines.get(i) {
+                let bar_color = match status {
+                    GitLineStatus::Added => theme.syntax.string,
+                    GitLineStatus::Modified => theme.syntax.function,
+                    GitLineStatus::Removed => theme.error_fg,
+                };
+                let bar_x = rect.min.x;
+                let (bar_y, bar_h) = if *status == GitLineStatus::Removed {
+                    (y + line_height - 3.0, 3.0)
+                } else {
+                    (y, line_height)
+                };
+                painter.rect_filled(
+                    egui::Rect::from_min_size(egui::pos2(bar_x, bar_y), egui::vec2(3.0, bar_h)),
+                    0.0,
+                    bar_color,
                 );
             }
 
