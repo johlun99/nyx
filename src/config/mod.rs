@@ -1,3 +1,4 @@
+pub mod ai_config;
 pub mod lsp_config;
 pub mod panels_config;
 pub(crate) mod schema;

@@ -8,7 +8,7 @@ use eframe::egui;
 
 const FIELD_COUNT: usize = 6;
 const AVAILABLE_LANGUAGES: &[&str] = &["rust", "json", "python", "javascript", "typescript"];
-const KNOWN_MODULES: &[&str] = &["filetree", "terminal", "git", "search"];
+const KNOWN_MODULES: &[&str] = &["filetree", "terminal", "git", "search", "ai_chat"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
@@ -861,6 +861,8 @@ impl SettingsView {
                 num_key = Some(2);
             } else if input.key_pressed(egui::Key::Num4) {
                 num_key = Some(3);
+            } else if input.key_pressed(egui::Key::Num5) {
+                num_key = Some(4);
             }
         });
 

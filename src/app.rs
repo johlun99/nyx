@@ -1,12 +1,13 @@
 // src/app.rs
+use crate::config::ai_config::AiConfig;
 use crate::config::lsp_config::LspConfig;
 use crate::config::panels_config::{PanelTab, PanelsConfig};
 use crate::config::NyxConfig;
 use crate::editor::Editor;
 use crate::lsp::LspManager;
 use crate::modules::{
-    CommandPalette, FiletreeModule, GitModule, ModuleAction, PaletteAction, SearchAction,
-    SearchMode, SearchPopup, TerminalModule,
+    AiChatModule, CommandPalette, FiletreeModule, GitModule, ModuleAction, PaletteAction,
+    SearchAction, SearchMode, SearchPopup, TerminalModule,
 };
 use crate::renderer::{EditorView, Theme};
 use crate::syntax::languages::language_for_extension;
@@ -51,6 +52,7 @@ pub struct NyxApp {
     filetree: FiletreeModule,
     git: GitModule,
     terminal: TerminalModule,
+    ai_chat: AiChatModule,
     command_palette: CommandPalette,
     command_palette_open: bool,
     search_popup: SearchPopup,
@@ -81,6 +83,8 @@ impl NyxApp {
             .or_else(|| std::env::current_dir().ok());
 
         let config_dir = NyxConfig::config_dir();
+        let ai_config = AiConfig::load_or_create(&AiConfig::config_path());
+
         let panels_config = {
             let path = config_dir.join("panels.json");
             if path.exists() {
@@ -107,15 +111,16 @@ impl NyxApp {
             last_completion_request: None,
             last_lsp_error_shown: None,
             panel_focus: PanelFocus::default(),
-            left_panel_visible: false,
-            bottom_panel_visible: false,
-            right_panel_visible: false,
+            left_panel_visible: !panels_config.is_empty(PanelSlot::Left),
+            bottom_panel_visible: !panels_config.is_empty(PanelSlot::Bottom),
+            right_panel_visible: !panels_config.is_empty(PanelSlot::Right),
             search_popup: SearchPopup::new(filetree_root.clone()),
             search_popup_open: false,
             diff_view: None,
             git: GitModule::new(filetree_root.clone()),
             filetree: FiletreeModule::new(filetree_root),
             terminal: TerminalModule::new(std::env::current_dir().unwrap_or_default()),
+            ai_chat: AiChatModule::new(ai_config),
             command_palette: CommandPalette::new(),
             command_palette_open: false,
             panels_config,
@@ -319,6 +324,7 @@ impl NyxApp {
             "filetree" => self.filetree.render(ui, &self.theme, focused),
             "git" => self.git.render(ui, &self.theme, focused),
             "terminal" => self.terminal.render(ui, &self.theme, focused),
+            "ai_chat" => self.ai_chat.render(ui, &self.theme, focused),
             other => {
                 let label = format!("{} — coming soon", Self::capitalize(other));
                 ui.label(
@@ -656,36 +662,38 @@ impl NyxApp {
                     return;
                 }
                 // Number key (1-9) tab switching
-                let slot_idx_for_switch = match slot {
-                    PanelSlot::Left => 0,
-                    PanelSlot::Bottom => 1,
-                    PanelSlot::Right => 2,
-                };
-                let tab_switch = ctx.input(|input| {
-                    for n in 1..=9u8 {
-                        let key = match n {
-                            1 => egui::Key::Num1,
-                            2 => egui::Key::Num2,
-                            3 => egui::Key::Num3,
-                            4 => egui::Key::Num4,
-                            5 => egui::Key::Num5,
-                            6 => egui::Key::Num6,
-                            7 => egui::Key::Num7,
-                            8 => egui::Key::Num8,
-                            9 => egui::Key::Num9,
-                            _ => unreachable!(),
-                        };
-                        if input.key_pressed(key) {
-                            return Some((n - 1) as usize);
+                {
+                    let slot_idx_for_switch = match slot {
+                        PanelSlot::Left => 0,
+                        PanelSlot::Bottom => 1,
+                        PanelSlot::Right => 2,
+                    };
+                    let tab_switch = ctx.input(|input| {
+                        for n in 1..=9u8 {
+                            let key = match n {
+                                1 => egui::Key::Num1,
+                                2 => egui::Key::Num2,
+                                3 => egui::Key::Num3,
+                                4 => egui::Key::Num4,
+                                5 => egui::Key::Num5,
+                                6 => egui::Key::Num6,
+                                7 => egui::Key::Num7,
+                                8 => egui::Key::Num8,
+                                9 => egui::Key::Num9,
+                                _ => unreachable!(),
+                            };
+                            if input.key_pressed(key) {
+                                return Some((n - 1) as usize);
+                            }
                         }
+                        None
+                    });
+                    if let Some(idx) = tab_switch {
+                        if idx < self.panels_config.tabs_for(slot).len() {
+                            self.panel_active_tab[slot_idx_for_switch] = idx;
+                        }
+                        return;
                     }
-                    None
-                });
-                if let Some(idx) = tab_switch {
-                    if idx < self.panels_config.tabs_for(slot).len() {
-                        self.panel_active_tab[slot_idx_for_switch] = idx;
-                    }
-                    return;
                 }
                 // Route input to modules in the focused panel
                 let slot_index = match slot {
@@ -738,6 +746,19 @@ impl NyxApp {
                         }
                         ModuleAction::None => {}
                     }
+                }
+                let has_ai_chat = self
+                    .panels_config
+                    .tabs_for(slot)
+                    .get(active_tab_idx)
+                    .or_else(|| self.panels_config.tabs_for(slot).first())
+                    .map(|tab| tab.modules.iter().any(|m| m == "ai_chat"))
+                    .unwrap_or(false);
+                if has_ai_chat {
+                    // Update context before handling input
+                    self.ai_chat
+                        .set_context(self.editor.file_path.clone(), None);
+                    self.ai_chat.handle_input(ctx);
                 }
                 return;
             }

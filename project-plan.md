@@ -57,36 +57,45 @@ Settings UI and keybindings cheatsheet.
 - [x] Settings GUI module (`Cmd+,`) with auto-save
 - [x] Searchable keybindings cheatsheet (`Cmd+K`)
 
-## Phase 5: LSP Integration
+## Phase 5: LSP Integration ✓
 
 Language intelligence.
 
-- [ ] LSP client implementation
-- [ ] Auto-detect LSP servers from system PATH
-- [ ] LSP lifecycle management (lazy start/stop)
-- [ ] Autocomplete
-- [ ] Go-to-definition / references
-- [ ] Hover info
-- [ ] Inline diagnostics
-- [ ] Rename / code actions
-- [ ] LSP settings passthrough
-- [ ] LSP download/install support
+- [x] LSP client implementation
+- [x] Auto-detect LSP servers from system PATH
+- [x] LSP lifecycle management (lazy start/stop)
+- [x] Autocomplete
+- [x] Go-to-definition / references
+- [x] Hover info
+- [x] Inline diagnostics
+- [x] Rename / code actions
+- [x] LSP settings passthrough
+- [x] LSP download/install support
 
-## Phase 6: Modules & Panels
+## Phase 6: Modules & Panels ✓
 
 Module infrastructure and built-in modules.
 
-- [ ] NyxModule trait and ModuleRegistry
-- [ ] Panel system (left, bottom, right) with toggle behavior
-- [ ] Panel focus navigation and resize via keyboard
-- [ ] Filetree module
-- [ ] Command palette (`Cmd+K`)
-- [ ] Terminal module (PTY-based)
-- [ ] Git module (status, stage, commit, diff)
-- [ ] Search module (fuzzy filename + content search)
-- [ ] Inline git diff (gutter markers)
+- [x] Panel system (left, bottom, right) with toggle behavior
+- [x] Panel focus navigation and resize via keyboard
+- [x] Filetree module
+- [x] Command palette (`Cmd+P`)
+- [x] Terminal module (PTY-based)
+- [x] Search module (fuzzy filename + content search)
+- [x] Git module (status, stage, commit, diff)
+- [x] Inline git diff (gutter markers)
 
-## Phase 7: Polish & Packaging
+## Phase 7: AI Integration
+
+AI-powered editing assistance.
+
+- [ ] AI chat panel (conversation UI in a panel module)
+- [ ] Inline AI assistant (code generation / editing in buffer)
+- [ ] API key configuration (settings UI)
+- [ ] Streaming responses
+- [ ] Context-aware prompts (current file, selection, diagnostics)
+
+## Phase 8: Polish & Packaging
 
 - [ ] Built-in package manager for LSP servers
 - [ ] Config import/export
@@ -112,3 +121,5 @@ Module infrastructure and built-in modules.
 - Phase 2: Core Vim Editing (PR #2)
 - Phase 3: Editor Polish (PR #3)
 - Phase 4: Config GUI & Keybindings (PR #4)
+- Phase 5: LSP Integration (PRs #5–#6)
+- Phase 6: Panels, filetree, terminal, command palette, search (PRs #7–#11)
