@@ -1,7 +1,9 @@
+mod diff;
 mod keybindings;
 mod lsp_servers;
 mod settings;
 
+pub use diff::{DiffInputResult, DiffMode, DiffView};
 pub use keybindings::KeybindingsView;
 pub use lsp_servers::LspServersView;
 pub use settings::{SettingsAction, SettingsTab, SettingsView};
